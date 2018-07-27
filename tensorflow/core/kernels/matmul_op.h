@@ -21,6 +21,8 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/lib/hash/hash.h"
 
+#include "tensorflow/core/util/tensor_format.h"
+
 namespace tensorflow {
 namespace functor {
 
@@ -50,6 +52,11 @@ struct MatMulFunctor {
       typename MatMulTypes<T>::in_type in0,
       typename MatMulTypes<T>::in_type in1,
       const Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1>& dim_pair);
+};
+
+template <typename Device, typename T>
+struct JamDData {
+  void operator()(const Device& d, const int size, const T *in, T *out, int bits) const;
 };
 
 }  // end namespace functor

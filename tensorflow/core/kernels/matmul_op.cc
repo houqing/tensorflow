@@ -17,18 +17,31 @@ limitations under the License.
 
 #define EIGEN_USE_THREADS
 
+// XXX jam data
 #include "tensorflow/core/kernels/matmul_op.h"
+#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/util/matmul_autotune.h"
+
+// XXX jam data
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_types.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/platform/types.h"
+
+
 #if GOOGLE_CUDA
 #include "cuda/include/cuda.h"
 #include "tensorflow/core/kernels/gpu_utils.h"
 #include "tensorflow/core/platform/stream_executor.h"
 #endif  // GOOGLE_CUDA
+
+#define JAM_DATA_ENABLE 1
+#define JAM_DATA_JAM_BITS 13
 
 namespace tensorflow {
 
@@ -451,6 +464,10 @@ class MatMulOp : public OpKernel {
     LaunchMatMul<Device, T, USE_CUBLAS>::GetBlasGemmAlgorithm(
         ctx, &algorithms_, &algorithms_set_already_);
     use_autotune_ = MatmulAutotuneEnable();
+#ifdef JAM_DATA_ENABLE
+    std::cout << "####: matmul jam_data_bits=" << JAM_DATA_JAM_BITS << std::endl;
+    jammed_num_ = 0;
+#endif	/* JAM_DATA_ENABLE */
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -493,8 +510,31 @@ class MatMulOp : public OpKernel {
       return;
     }
 
+#ifdef JAM_DATA_ENABLE
+    if (typeid(T) == typeid(float)) {
+    Tensor a_jammed;
+    Tensor b_jammed;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<float>::v(), a.shape(), &a_jammed));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<float>::v(), b.shape(), &b_jammed));
+
+    functor::JamDData<GPUDevice, float>()(ctx->eigen_device<GPUDevice>(), static_cast<const int>(a.flat<float>().size()), a.flat<float>().data(), a_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+    functor::JamDData<GPUDevice, float>()(ctx->eigen_device<GPUDevice>(), static_cast<const int>(b.flat<float>().size()), b.flat<float>().data(), b_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+
+    if ((jammed_num_ % 1000) == 0) {
+	    std::cout << "########: matmul jammed_num=" << jammed_num_ << std::endl;
+    }
+    jammed_num_++;
+
+    LaunchMatMul<Device, T, USE_CUBLAS>::launch(
+        ctx, a_jammed, b_jammed, dim_pair, &algorithms_, use_autotune_, out);
+    } else {
+#endif /* JAM_DATA_ENABLE */
+
     LaunchMatMul<Device, T, USE_CUBLAS>::launch(
         ctx, a, b, dim_pair, &algorithms_, use_autotune_, out);
+#ifdef JAM_DATA_ENABLE
+    }
+#endif /* JAM_DATA_ENABLE */
   }
 
  private:
@@ -503,6 +543,9 @@ class MatMulOp : public OpKernel {
   bool use_autotune_;
   bool transpose_a_;
   bool transpose_b_;
+#ifdef JAM_DATA_ENABLE
+  int jammed_num_;
+#endif /* JAM_DATA_ENABLE */
 };
 
 namespace functor {

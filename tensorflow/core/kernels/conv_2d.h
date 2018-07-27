@@ -22,6 +22,9 @@ limitations under the License.
 #include "tensorflow/core/kernels/eigen_spatial_convolutions.h"
 #include "tensorflow/core/util/tensor_format.h"
 
+#define JAM_DATA_ENABLE 1
+#define JAM_DATA_JAM_BITS 13
+
 namespace tensorflow {
 namespace functor {
 
@@ -288,6 +291,13 @@ struct ReverseTransformFilter {
   void operator()(const Device& d, typename TTypes<T, NDIMS>::ConstTensor in,
                   typename TTypes<T, NDIMS>::Tensor out);
 };
+
+#ifdef JAM_DATA_ENABLE
+template <typename Device, typename T>
+struct JamData {
+  void operator()(const Device& d, const int size, const T *in, T *out, int bits);
+};
+#endif /* JAM_DATA_ENABLE */
 
 }  // namespace functor
 

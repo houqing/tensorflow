@@ -29,6 +29,8 @@ limitations under the License.
 #include "tensorflow/core/util/cuda_kernel_helper.h"
 #include "tensorflow/core/util/tensor_format.h"
 
+#define JAM_DATA_ENABLE 1
+
 namespace tensorflow {
 
 typedef Eigen::GpuDevice GPUDevice;
@@ -1004,6 +1006,34 @@ struct NCHWToNHWC<GPUDevice, T, NDIMS> {
     RunSwapDimension1And2InTensor3(d, in.data(), combined_dims, out.data());
   }
 };
+
+#ifdef JAM_DATA_ENABLE
+namespace {
+
+__global__ void JamDataCudaKernel(int nthreads, const float* input, float* output, const int bits) {
+	CUDA_1D_KERNEL_LOOP(index, nthreads) {
+		output[index] = __uint_as_float(__float_as_uint(input[index]) & (~((1 << bits) - 1)));
+	} 
+}
+}	// namespace
+
+template <typename T>
+struct JamData<GPUDevice, T> {
+  typedef GPUDevice Device;
+  void operator()(const Device& d, const int size, const T *in, T *out, int bits) {
+	  CudaLaunchConfig config = GetCudaLaunchConfig(size, d);
+
+	  JamDataCudaKernel<<<config.block_count, config.thread_per_block, 0, d.stream()>>>(size, in, out, bits);
+  };
+};
+
+#define DEFINE_GPU_SPECS(T)	\
+	template struct JamData<GPUDevice, T>;
+
+TF_CALL_float(DEFINE_GPU_SPECS);
+
+#undef DEFINE_GPU_SPECS
+#endif /* JAM_DATA_ENABLE */
 
 }  // namespace functor
 

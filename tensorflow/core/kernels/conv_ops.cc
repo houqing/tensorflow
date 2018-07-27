@@ -50,6 +50,9 @@ limitations under the License.
 #include "tensorflow/core/platform/stream_executor.h"
 #endif  // GOOGLE_CUDA
 
+#define JAM_DATA_ENABLE 1
+#define JAM_DATA_JAM_BITS 13
+
 namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
@@ -296,6 +299,10 @@ class Conv2DOp : public BinaryOp<T> {
         context, dilation_h > 0 && dilation_w > 0,
         errors::InvalidArgument("Dilated rates should be larger than 0."));
     OP_REQUIRES_OK(context, context->GetAttr("padding", &padding_));
+#ifdef JAM_DATA_ENABLE
+    std::cout << "####: conv2d jam_data_bits=" << JAM_DATA_JAM_BITS << std::endl;
+    jammed_num_ = 0;
+#endif	/* JAM_DATA_ENABLE */
   }
 
   void Compute(OpKernelContext* context) override {
@@ -401,6 +408,47 @@ class Conv2DOp : public BinaryOp<T> {
       return;
     }
 
+#ifdef JAM_DATA_ENABLE
+    if (typeid(T) == typeid(float)) {
+	    Tensor input_jammed;
+	    Tensor filter_jammed;
+	    OP_REQUIRES_OK(context, context->allocate_temp(DataTypeToEnum<float>::v(), input.shape(), &input_jammed));
+	    OP_REQUIRES_OK(context, context->allocate_temp(DataTypeToEnum<float>::v(), filter.shape(), &filter_jammed));
+
+	    //std::cout << "####: " << input.NumElements() << "\t| " << input.flat<float>().size() << "\t|" << std::endl;
+
+	    functor::JamData<GPUDevice, float>()(context->eigen_device<GPUDevice>(), static_cast<const int>(input.flat<float>().size()), input.flat<float>().data(), input_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+	    functor::JamData<GPUDevice, float>()(context->eigen_device<GPUDevice>(), static_cast<const int>(filter.flat<float>().size()), filter.flat<float>().data(), filter_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+
+	    if ((jammed_num_ % 1000) == 0) {
+		    std::cout << "########: conv2d jammed_num=" << jammed_num_ << std::endl;
+	    }
+	    jammed_num_++;
+
+#ifdef TENSORFLOW_USE_LIBXSMM_CONVOLUTIONS
+    if (LaunchXsmmConvOp<Device, T>::Run(
+            context, input_jammed, filter_jammed, batch, input_rows, input_cols, in_depth,
+            filter_rows, filter_cols, pad_rows, pad_cols, out_rows, out_cols,
+            out_depth, dilation_rows, dilation_cols, stride_rows, stride_cols,
+            output, data_format_)) {
+      return;
+    }
+#endif
+
+    if (LaunchDeepConvOp<Device, T>::Run(
+            context, input_jammed, filter_jammed, batch, input_rows, input_cols, in_depth,
+            filter_rows, filter_cols, pad_rows, pad_cols, out_rows, out_cols,
+            out_depth, dilation_rows, dilation_cols, stride_rows, stride_cols,
+            output, data_format_)) {
+      return;
+    }
+
+    launcher_(context, use_cudnn_, cudnn_use_autotune_, input_jammed, filter_jammed,
+              dilation_rows, dilation_cols, stride_rows, stride_cols, padding_,
+              output, data_format_);
+    } else {
+#endif	/* JAM_DATA_ENABLE */
+
 #ifdef TENSORFLOW_USE_LIBXSMM_CONVOLUTIONS
     if (LaunchXsmmConvOp<Device, T>::Run(
             context, input, filter, batch, input_rows, input_cols, in_depth,
@@ -422,6 +470,9 @@ class Conv2DOp : public BinaryOp<T> {
     launcher_(context, use_cudnn_, cudnn_use_autotune_, input, filter,
               dilation_rows, dilation_cols, stride_rows, stride_cols, padding_,
               output, data_format_);
+#ifdef JAM_DATA_ENABLE
+    }
+#endif /* JAM_DATA_ENABLE */
   }
 
  private:
@@ -434,6 +485,9 @@ class Conv2DOp : public BinaryOp<T> {
   bool cudnn_use_autotune_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(Conv2DOp);
+#ifdef JAM_DATA_ENABLE
+  int jammed_num_;
+#endif /* JAM_DATA_ENABLE */
 };
 
 #define REGISTER_CPU(T)                                         \

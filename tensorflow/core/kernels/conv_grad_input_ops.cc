@@ -48,6 +48,9 @@ limitations under the License.
 #include "tensorflow/core/platform/stream_executor.h"
 #endif  // GOOGLE_CUDA
 
+#define JAM_DATA_ENABLE 1
+#define JAM_DATA_JAM_BITS 13
+
 namespace {
 
 // Returns in 'im_data' (assumes to be zero-initialized) image patch in storage
@@ -651,6 +654,10 @@ class Conv2DSlowBackpropInputOp : public OpKernel {
     use_cudnn_ &= CanUseCudnn();
     cudnn_use_autotune_ = CudnnUseAutotune();
     OP_REQUIRES_OK(context, context->GetAttr("padding", &padding_));
+#ifdef JAM_DATA_ENABLE
+    std::cout << "####: conv2d-grad-input jam_data_bits=" << JAM_DATA_JAM_BITS << std::endl;
+    jammed_num_ = 0;
+#endif	/* JAM_DATA_ENABLE */
   }
 
   void Compute(OpKernelContext* context) override {
@@ -682,9 +689,33 @@ class Conv2DSlowBackpropInputOp : public OpKernel {
     const int dilation_rows = GetTensorDim(dilations_, data_format_, 'H');
     const int dilation_cols = GetTensorDim(dilations_, data_format_, 'W');
 
+#ifdef JAM_DATA_ENABLE
+    if (typeid(T) == typeid(float)) {
+    Tensor filter_jammed;
+    Tensor out_backprop_jammed;
+    OP_REQUIRES_OK(context, context->allocate_temp(DataTypeToEnum<float>::v(), filter.shape(), &filter_jammed));
+    OP_REQUIRES_OK(context, context->allocate_temp(DataTypeToEnum<float>::v(), out_backprop.shape(), &out_backprop_jammed));
+
+    functor::JamData<GPUDevice, float>()(context->eigen_device<GPUDevice>(), static_cast<const int>(filter.flat<float>().size()), filter.flat<float>().data(), filter_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+    functor::JamData<GPUDevice, float>()(context->eigen_device<GPUDevice>(), static_cast<const int>(out_backprop.flat<float>().size()), out_backprop.flat<float>().data(), out_backprop_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+
+    if ((jammed_num_ % 1000) == 0) {
+	    std::cout << "########: conv2d-grad-input jammed_num=" << jammed_num_ << std::endl;
+    }
+    jammed_num_++;
+
+    launcher_(context, use_cudnn_, cudnn_use_autotune_, out_backprop_jammed, filter_jammed,
+              dilation_rows, dilation_cols, stride_rows, stride_cols, padding_,
+              in_backprop, data_format_);
+    } else {
+#endif	/* JAM_DATA_ENABLE */
+
     launcher_(context, use_cudnn_, cudnn_use_autotune_, out_backprop, filter,
               dilation_rows, dilation_cols, stride_rows, stride_cols, padding_,
               in_backprop, data_format_);
+#ifdef JAM_DATA_ENABLE
+    }
+#endif /* JAM_DATA_ENABLE */
   }
 
  private:
@@ -697,6 +728,9 @@ class Conv2DSlowBackpropInputOp : public OpKernel {
   bool cudnn_use_autotune_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(Conv2DSlowBackpropInputOp);
+#ifdef JAM_DATA_ENABLE
+  int jammed_num_;
+#endif /* JAM_DATA_ENABLE */
 };
 
 template <typename T>

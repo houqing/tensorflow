@@ -2861,6 +2861,11 @@ tf_kernel_library(
         "mkl_matmul_op.cc",
     ]),
     hdrs = ["matmul_op.h"],
+    gpu_srcs = [
+	"matmul_op.h",
+	"matmul_op_gpu.cu.cc",
+    ],
+    visibility = ["//visibility:private"],
     defines = select({
         ":xsmm": [
             "TENSORFLOW_USE_LIBXSMM",

@@ -55,6 +55,7 @@ struct TernaryClipOp {
                   typename TTypes<T>::ConstFlat &in2_flat,
                   typename TTypes<T>::Flat &out_flat) const;
 };
+
 }
 }  // namespace tensorflow
 

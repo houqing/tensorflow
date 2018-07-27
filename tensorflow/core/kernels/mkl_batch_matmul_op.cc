@@ -40,6 +40,8 @@ limitations under the License.
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/types.h"
 
+#define JAM_DATA_ENABLE 1
+
 namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
@@ -50,6 +52,9 @@ class BatchMatMulMkl : public OpKernel {
   explicit BatchMatMulMkl(OpKernelConstruction *context) : OpKernel(context) {
     OP_REQUIRES_OK(context, context->GetAttr("adj_x", &adj_x_));
     OP_REQUIRES_OK(context, context->GetAttr("adj_y", &adj_y_));
+#ifdef JAM_DATA_ENABLE
+    std::cout << "####: batch_matmul_mkl jam_data_bits=" << JAM_DATA_JAM_BITS << std::endl;
+#endif /* JAM_DATA_ENABLE */
   }
 
   virtual ~BatchMatMulMkl() {}

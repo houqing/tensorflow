@@ -35,6 +35,9 @@ limitations under the License.
 #include "tensorflow/core/platform/stream_executor.h"
 #endif  // GOOGLE_CUDA
 
+#define JAM_DATA_ENABLE 1
+#define JAM_DATA_JAM_BITS 13
+
 namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;
@@ -192,6 +195,13 @@ struct SequentialMatMulKernel {
 };
 
 }  // namespace
+
+namespace functor {
+template <typename Device, typename T>
+struct JamDData {
+	  void operator()(const Device& d, const int size, const T *in, T *out, int bits) const;
+};
+}	// functor
 
 template <typename Device, typename Scalar>
 struct LaunchBatchMatMul;
@@ -443,6 +453,10 @@ class BatchMatMul : public OpKernel {
   explicit BatchMatMul(OpKernelConstruction* context) : OpKernel(context) {
     OP_REQUIRES_OK(context, context->GetAttr("adj_x", &adj_x_));
     OP_REQUIRES_OK(context, context->GetAttr("adj_y", &adj_y_));
+#ifdef JAM_DATA_ENABLE
+    std::cout << "####: batch_matmul jam_data_bits=" << JAM_DATA_JAM_BITS << std::endl;
+    jammed_num_ = 0;
+#endif	/* JAM_DATA_ENABLE */
   }
 
   virtual ~BatchMatMul() {}
@@ -497,13 +511,39 @@ class BatchMatMul : public OpKernel {
     }
     Tensor out_reshaped;
     CHECK(out_reshaped.CopyFrom(*out, TensorShape({n, d0, d3})));
+#ifdef JAM_DATA_ENABLE
+    if (typeid(Scalar) == typeid(float)) {
+    Tensor in0_reshaped_jammed;
+    Tensor in1_reshaped_jammed;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<float>::v(), in0_reshaped.shape(), &in0_reshaped_jammed));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<float>::v(), in1_reshaped.shape(), &in1_reshaped_jammed));
+
+    functor::JamDData<GPUDevice, float>()(ctx->eigen_device<GPUDevice>(), static_cast<const int>(in0_reshaped.flat<float>().size()), in0_reshaped.flat<float>().data(), in0_reshaped_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+    functor::JamDData<GPUDevice, float>()(ctx->eigen_device<GPUDevice>(), static_cast<const int>(in1_reshaped.flat<float>().size()), in1_reshaped.flat<float>().data(), in1_reshaped_jammed.flat<float>().data(), JAM_DATA_JAM_BITS);
+
+    if ((jammed_num_ % 1000) == 0) {
+	    std::cout << "########: batch_matmul jammed_num=" << jammed_num_ << std::endl;
+    }
+    jammed_num_++;
+
+    LaunchBatchMatMul<Device, Scalar>::Launch(ctx, in0_reshaped_jammed, in1_reshaped_jammed,
+                                              adj_x_, adj_y_, &out_reshaped);
+
+    } else {
+#endif /* JAM_DATA_ENABLE */
     LaunchBatchMatMul<Device, Scalar>::Launch(ctx, in0_reshaped, in1_reshaped,
                                               adj_x_, adj_y_, &out_reshaped);
+#ifdef JAM_DATA_ENABLE
+    }
+#endif /* JAM_DATA_ENABLE */
   }
 
  private:
   bool adj_x_;
   bool adj_y_;
+#ifdef JAM_DATA_ENABLE
+  int jammed_num_;
+#endif /* JAM_DATA_ENABLE */
 };
 
 #define REGISTER_BATCH_MATMUL_CPU(TYPE)                                 \
