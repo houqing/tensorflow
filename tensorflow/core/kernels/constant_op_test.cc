@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/kernel_benchmark_testlib.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/framework/op.h"
@@ -23,8 +24,11 @@ limitations under the License.
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/kernels/ops_testutil.h"
+#include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/test_benchmark.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/public/session_options.h"
+#include "tensorflow/core/public/version.h"
 
 namespace tensorflow {
 
@@ -60,6 +64,7 @@ void ConstantOpTest::PersistentMemoryTrackingTest(bool on_gpu) {
   std::unique_ptr<OpKernel> op(CreateOpKernel(device_type, device.get(),
                                               cpu_allocator(), const_node,
                                               TF_GRAPH_DEF_VERSION, &status));
+  TF_ASSERT_OK(status);
 
   OpKernelContext::Params params;
   params.device = device.get();
@@ -78,16 +83,17 @@ void ConstantOpTest::PersistentMemoryTrackingTest(bool on_gpu) {
   }
 
   // Remove memory leak errors.
-  for (auto allocator_pair : ctx.wrapped_allocators()) {
+  for (auto allocator_pair : ctx.ConsumeWrappedAllocators()) {
     allocator_pair.second->GetRecordsAndUnRef();
   }
 }
 
 TEST_F(ConstantOpTest, PersistentMemoryTracking) {
   PersistentMemoryTrackingTest(false);
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
   PersistentMemoryTrackingTest(true);
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 }
 
 // Returns graph containing "num" const nodes.  If 'sequential' is

@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_FRAMEWORK_ATTR_VALUE_UTIL_H_
-#define TENSORFLOW_FRAMEWORK_ATTR_VALUE_UTIL_H_
+#ifndef TENSORFLOW_CORE_FRAMEWORK_ATTR_VALUE_UTIL_H_
+#define TENSORFLOW_CORE_FRAMEWORK_ATTR_VALUE_UTIL_H_
 
 #include <functional>
 #include <string>
@@ -36,7 +36,7 @@ class NameAttrList;
 
 // A human-readable rendering of attr_value, that is more concise than a
 // text-format proto.
-string SummarizeAttrValue(const AttrValue& attr_value);
+std::string SummarizeAttrValue(const AttrValue& attr_value);
 
 // Generates an error if attr_value doesn't have the indicated attr type.
 Status AttrValueHasType(const AttrValue& attr_value, StringPiece type);
@@ -51,7 +51,8 @@ Status AttrValueHasType(const AttrValue& attr_value, StringPiece type);
 bool ParseAttrValue(StringPiece type, StringPiece text, AttrValue* out);
 
 // Sets *out based on the type of value.
-void SetAttrValue(const string& value, AttrValue* out);
+void SetAttrValue(const std::string& value, AttrValue* out);
+void SetAttrValue(const tstring& value, AttrValue* out);
 void SetAttrValue(const char* value, AttrValue* out);
 void SetAttrValue(StringPiece value, AttrValue* out);
 void SetAttrValue(int64 value, AttrValue* out);
@@ -68,6 +69,7 @@ void SetAttrValue(const TensorProto& value, AttrValue* out);
 void SetAttrValue(const NameAttrList& value, AttrValue* out);
 
 void SetAttrValue(gtl::ArraySlice<string> value, AttrValue* out);
+void SetAttrValue(gtl::ArraySlice<tstring> value, AttrValue* out);
 void SetAttrValue(gtl::ArraySlice<const char*> value, AttrValue* out);
 void SetAttrValue(gtl::ArraySlice<StringPiece> value, AttrValue* out);
 void SetAttrValue(gtl::ArraySlice<int64> value, AttrValue* out);
@@ -86,6 +88,8 @@ void SetAttrValue(gtl::ArraySlice<TensorProto> value, AttrValue* out);
 void SetAttrValue(gtl::ArraySlice<NameAttrList> value, AttrValue* out);
 
 void SetAttrValue(const AttrValue& value, AttrValue* out);
+
+void MoveAttrValue(std::vector<string>&& value, AttrValue* out);
 
 // Returns true if a and b have the same value.
 bool AreAttrValuesEqual(const AttrValue& a, const AttrValue& b);
@@ -126,4 +130,4 @@ bool SubstitutePlaceholders(const SubstituteFunc& substitute, AttrValue* value);
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_FRAMEWORK_ATTR_VALUE_UTIL_H_
+#endif  // TENSORFLOW_CORE_FRAMEWORK_ATTR_VALUE_UTIL_H_

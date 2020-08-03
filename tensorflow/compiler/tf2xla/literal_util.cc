@@ -27,19 +27,52 @@ Status HostTensorToBorrowingLiteral(const Tensor& host_tensor,
   xla::Shape xla_shape;
   TF_RETURN_IF_ERROR(TensorShapeToXLAShape(host_tensor.dtype(),
                                            host_tensor.shape(), &xla_shape));
+  return HostTensorToBorrowingLiteral(xla_shape, host_tensor, literal);
+}
+
+Status HostTensorToBorrowingLiteral(const xla::Shape& xla_shape,
+                                    const Tensor& host_tensor,
+                                    xla::BorrowingLiteral* literal) {
+  const auto& tshape = host_tensor.shape();
+  TF_RET_CHECK(tshape.IsFullyDefined() &&
+               tshape.dims() == xla_shape.dimensions_size() &&
+               tshape.dim_sizes() == xla_shape.dimensions())
+      << "Provided xla::Shape must have the same dims as the Tensor shape.";
   *literal = xla::BorrowingLiteral(
       static_cast<const char*>(DMAHelper::base(&host_tensor)), xla_shape);
   return Status::OK();
 }
 
-Status HostTensorsToBorrowingLiteralTuple(
-    tensorflow::gtl::ArraySlice<Tensor> host_tensors,
-    xla::BorrowingLiteral* literal) {
+xla::StatusOr<xla::Literal> HostTensorToLiteral(const Tensor& host_tensor) {
+  xla::BorrowingLiteral literal;
+  TF_RETURN_IF_ERROR(HostTensorToBorrowingLiteral(host_tensor, &literal));
+  return literal.Clone();
+}
+
+Status HostTensorToMutableBorrowingLiteral(
+    Tensor* host_tensor, xla::MutableBorrowingLiteral* literal) {
+  xla::Shape xla_shape;
+  TF_RETURN_IF_ERROR(TensorShapeToXLAShape(host_tensor->dtype(),
+                                           host_tensor->shape(), &xla_shape));
+  return HostTensorToMutableBorrowingLiteral(xla_shape, host_tensor, literal);
+}
+
+Status HostTensorToMutableBorrowingLiteral(
+    const xla::Shape& xla_shape, Tensor* host_tensor,
+    xla::MutableBorrowingLiteral* literal) {
+  *literal = xla::MutableBorrowingLiteral(
+      static_cast<const char*>(DMAHelper::base(host_tensor)), xla_shape);
+
+  return Status::OK();
+}
+
+Status HostTensorsToBorrowingLiteralTuple(absl::Span<const Tensor> host_tensors,
+                                          xla::BorrowingLiteral* literal) {
   std::vector<const char*> buf_ptrs;
   buf_ptrs.reserve(host_tensors.size());
   std::vector<xla::Shape> tensor_shapes(host_tensors.size());
 
-  for (int i = 0; i < host_tensors.size(); i++) {
+  for (int i = 0, end = host_tensors.size(); i < end; i++) {
     // Validate runtime shapes and fail if it doesn't match the contract.
     const Tensor* tensor = &host_tensors[i];
     buf_ptrs.emplace_back(static_cast<const char*>(DMAHelper::base(tensor)));
@@ -55,7 +88,7 @@ Status HostTensorsToBorrowingLiteralTuple(
 
 Status CopyLiteralToHostTensor(const xla::LiteralSlice& literal,
                                Tensor* host_tensor) {
-  TF_RET_CHECK(xla::ShapeUtil::IsArray(literal.shape()) &&
+  TF_RET_CHECK(literal.shape().IsArray() &&
                xla::ShapeUtil::ElementsIn(literal.shape()) ==
                    host_tensor->NumElements());
   xla::PrimitiveType primitive_type;

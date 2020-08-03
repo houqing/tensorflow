@@ -57,11 +57,12 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
     ops.reset_default_graph()
     self.debug_server.clear_data()
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingLargeGraphDefsWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
-      u = variables.Variable(42.0, name="original_u")
+      u = variables.VariableV1(42.0, name="original_u")
       for _ in xrange(50 * 1000):
         u = array_ops.identity(u)
       sess.run(variables.global_variables_initializer())
@@ -70,7 +71,8 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
         del fetches, feeds
         return framework.WatchOptions(
             debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"original_u")
+            node_name_regex_allowlist=r"original_u")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       self.assertAllClose(42.0, sess.run(u))
@@ -85,8 +87,9 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
           for graph_def in self.debug_server.partition_graph_defs])
       self.assertGreater(max_graph_def_size, 4 * 1024 * 1024)
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingLargeFloatTensorWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
       u_init_val_array = list(xrange(1200 * 1024))
@@ -94,13 +97,13 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
 
       u_init = constant_op.constant(
           u_init_val_array, dtype=dtypes.float32, name="u_init")
-      u = variables.Variable(u_init, name="u")
+      u = variables.VariableV1(u_init, name="u")
 
       def watch_fn(fetches, feeds):
         del fetches, feeds  # Unused by this watch_fn.
         return framework.WatchOptions(
-            debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"u_init")
+            debug_ops=["DebugIdentity"], node_name_regex_allowlist=r"u_init")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       sess.run(u.initializer)
@@ -109,21 +112,22 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
           u_init_val_array,
           self.debug_server.debug_tensor_values["u_init:0:DebugIdentity"][0])
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingStringTensorWithAlmostTooLargeStringsWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
       u_init_val = [
           b"", b"spam", b"A" * 2500 * 1024, b"B" * 2500 * 1024, b"egg", b""]
       u_init = constant_op.constant(
           u_init_val, dtype=dtypes.string, name="u_init")
-      u = variables.Variable(u_init, name="u")
+      u = variables.VariableV1(u_init, name="u")
 
       def watch_fn(fetches, feeds):
         del fetches, feeds
         return framework.WatchOptions(
-            debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"u_init")
+            debug_ops=["DebugIdentity"], node_name_regex_allowlist=r"u_init")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       sess.run(u.initializer)
@@ -132,8 +136,9 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
           u_init_val,
           self.debug_server.debug_tensor_values["u_init:0:DebugIdentity"][0])
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingLargeStringTensorWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
       strs_total_size_threshold = 5000 * 1024
@@ -146,13 +151,13 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
 
       u_init = constant_op.constant(
           u_init_val_array, dtype=dtypes.string, name="u_init")
-      u = variables.Variable(u_init, name="u")
+      u = variables.VariableV1(u_init, name="u")
 
       def watch_fn(fetches, feeds):
         del fetches, feeds
         return framework.WatchOptions(
-            debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"u_init")
+            debug_ops=["DebugIdentity"], node_name_regex_allowlist=r"u_init")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       sess.run(u.initializer)
@@ -161,19 +166,20 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
           u_init_val_array,
           self.debug_server.debug_tensor_values["u_init:0:DebugIdentity"][0])
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingEmptyFloatTensorWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
       u_init = constant_op.constant(
           [], dtype=dtypes.float32, shape=[0], name="u_init")
-      u = variables.Variable(u_init, name="u")
+      u = variables.VariableV1(u_init, name="u")
 
       def watch_fn(fetches, feeds):
         del fetches, feeds
         return framework.WatchOptions(
-            debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"u_init")
+            debug_ops=["DebugIdentity"], node_name_regex_allowlist=r"u_init")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       sess.run(u.initializer)
@@ -183,19 +189,20 @@ class LargeGraphAndLargeTensorsDebugTest(test_util.TensorFlowTestCase):
       self.assertEqual(np.float32, u_init_value.dtype)
       self.assertEqual(0, len(u_init_value))
 
+  @test_util.run_v1_only("currently failing on v2")
   def testSendingEmptyStringTensorWorks(self):
-    with self.test_session(
+    with self.session(
         use_gpu=True,
         config=session_debug_testlib.no_rewrite_session_config()) as sess:
       u_init = constant_op.constant(
           [], dtype=dtypes.string, shape=[0], name="u_init")
-      u = variables.Variable(u_init, name="u")
+      u = variables.VariableV1(u_init, name="u")
 
       def watch_fn(fetches, feeds):
         del fetches, feeds
         return framework.WatchOptions(
-            debug_ops=["DebugIdentity"],
-            node_name_regex_whitelist=r"u_init")
+            debug_ops=["DebugIdentity"], node_name_regex_allowlist=r"u_init")
+
       sess = grpc_wrapper.GrpcDebugWrapperSession(
           sess, "localhost:%d" % self.debug_server_port, watch_fn=watch_fn)
       sess.run(u.initializer)

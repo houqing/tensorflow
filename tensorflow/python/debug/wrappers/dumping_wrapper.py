@@ -45,7 +45,7 @@ class DumpingDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
       session_root: (`str`) Path to the session root directory. Must be a
         directory that does not exist or an empty directory. If the directory
         does not exist, it will be created by the debugger core during debug
-        @{tf.Session.run}
+        `tf.Session.run`
         calls.
         As the `run()` calls occur, subdirectories will be added to
         `session_root`. The subdirectories' names has the following pattern:
@@ -90,7 +90,7 @@ class DumpingDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
     self._run_counter_lock = threading.Lock()
 
   def prepare_run_debug_urls(self, fetches, feed_dict):
-    """Implementation of abstrat method in superclass.
+    """Implementation of abstract method in superclass.
 
     See doc of `NonInteractiveDebugWrapperSession.prepare_run_debug_urls()`
     for details. This implementation creates a run-specific subdirectory under

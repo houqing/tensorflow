@@ -18,6 +18,7 @@ limitations under the License.
 #define EIGEN_USE_THREADS
 
 #include <stdint.h>
+
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -25,6 +26,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "absl/strings/str_format.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/device_base.h"
 #include "tensorflow/core/framework/kernel_def_builder.h"
@@ -38,6 +40,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/hinge-loss.h"
 #include "tensorflow/core/kernels/logistic-loss.h"
 #include "tensorflow/core/kernels/loss.h"
+#include "tensorflow/core/kernels/poisson-loss.h"
 #include "tensorflow/core/kernels/sdca_internal.h"
 #include "tensorflow/core/kernels/smooth-hinge-loss.h"
 #include "tensorflow/core/kernels/squared-loss.h"
@@ -46,7 +49,6 @@ limitations under the License.
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
 #include "tensorflow/core/lib/gtl/inlined_vector.h"
-#include "tensorflow/core/lib/strings/stringprintf.h"
 #include "tensorflow/core/platform/fingerprint.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
@@ -75,12 +77,18 @@ struct ComputeOptions {
       loss_updater.reset(new HingeLossUpdater);
     } else if (loss_type == "smooth_hinge_loss") {
       loss_updater.reset(new SmoothHingeLossUpdater);
+    } else if (loss_type == "poisson_loss") {
+      loss_updater.reset(new PoissonLossUpdater);
     } else {
       OP_REQUIRES(
           context, false,
           errors::InvalidArgument("Unsupported loss type: ", loss_type));
     }
-    OP_REQUIRES_OK(context, context->GetAttr("adaptative", &adaptive));
+    auto s = context->GetAttr("adaptative", &adaptive);
+    if (!s.ok()) {
+      s = context->GetAttr("adaptive", &adaptive);
+    }
+    OP_REQUIRES_OK(context, s);
     OP_REQUIRES_OK(
         context, context->GetAttr("num_sparse_features", &num_sparse_features));
     OP_REQUIRES_OK(context, context->GetAttr("num_sparse_features_with_values",
@@ -96,7 +104,7 @@ struct ComputeOptions {
                         static_cast<int64>(num_dense_features) <=
                     std::numeric_limits<int>::max(),
                 errors::InvalidArgument(
-                    strings::Printf("Too many feature groups: %lld > %d",
+                    absl::StrFormat("Too many feature groups: %d > %d",
                                     static_cast<int64>(num_sparse_features) +
                                         static_cast<int64>(num_dense_features),
                                     std::numeric_limits<int>::max())));
@@ -158,7 +166,7 @@ void DoCompute(const ComputeOptions& options, OpKernelContext* const context) {
   }
   struct {
     mutex mu;
-    Status value GUARDED_BY(mu);
+    Status value TF_GUARDED_BY(mu);
   } train_step_status;
   std::atomic<std::int64_t> atomic_index(-1);
   auto train_step = [&](const int64 begin, const int64 end) {
@@ -242,6 +250,8 @@ class SdcaOptimizer : public OpKernel {
 };
 REGISTER_KERNEL_BUILDER(Name("SdcaOptimizer").Device(DEVICE_CPU),
                         SdcaOptimizer);
+REGISTER_KERNEL_BUILDER(Name("SdcaOptimizerV2").Device(DEVICE_CPU),
+                        SdcaOptimizer);
 
 class SdcaShrinkL1 : public OpKernel {
  public:
@@ -303,7 +313,7 @@ class SdcaFprint : public OpKernel {
     OP_REQUIRES_OK(context, context->allocate_output(
                                 0, TensorShape({num_elements, 2}), &out));
 
-    const auto in_values = input.flat<string>();
+    const auto in_values = input.flat<tstring>();
     auto out_values = out->matrix<int64>();
 
     for (int64 i = 0; i < num_elements; ++i) {

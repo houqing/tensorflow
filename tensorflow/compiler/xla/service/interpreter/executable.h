@@ -18,18 +18,19 @@ limitations under the License.
 
 #include <memory>
 
+#include "absl/types/span.h"
 #include "tensorflow/compiler/xla/service/executable.h"
 #include "tensorflow/compiler/xla/service/hlo_cost_analysis.h"
 #include "tensorflow/compiler/xla/service/hlo_evaluator.h"
 #include "tensorflow/compiler/xla/service/hlo_execution_profile.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
 #include "tensorflow/compiler/xla/service/hlo_module_config.h"
+#include "tensorflow/compiler/xla/service/interpreter/executable_base.h"
 #include "tensorflow/compiler/xla/service/service_executable_run_options.h"
 #include "tensorflow/compiler/xla/service/shaped_buffer.h"
 #include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/types.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
-#include "tensorflow/core/lib/gtl/array_slice.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/stream_executor_no_cuda.h"
@@ -40,30 +41,26 @@ namespace interpreter {
 
 // Responsible for running a HLO graph through the HloEvaluator and output
 // buffer allocation. Refer to interpreter/README.md for more.
-class InterpreterExecutable : public Executable {
+class InterpreterExecutable : public InterpreterExecutableBase {
  public:
-  InterpreterExecutable(std::unique_ptr<const HloModule> hlo_module,
-                        std::unique_ptr<HloEvaluator> evaluator);
-  ~InterpreterExecutable() override;
-
-  StatusOr<ScopedShapedBuffer> ExecuteOnStream(
-      const ServiceExecutableRunOptions* run_options,
-      tensorflow::gtl::ArraySlice<const ShapedBuffer*> arguments,
-      HloExecutionProfile* hlo_execution_profile) override
-      LOCKS_EXCLUDED(evaluator_lock_);
-
-  StatusOr<ScopedShapedBuffer> ExecuteAsyncOnStream(
-      const ServiceExecutableRunOptions* run_options,
-      tensorflow::gtl::ArraySlice<const ShapedBuffer*> arguments) override;
+  InterpreterExecutable(
+      std::unique_ptr<HloModule> hlo_module,
+      std::unique_ptr<HloEvaluator> evaluator,
+      absl::optional<DynamicDimensionInference> dynamic_dymension_inference);
 
   static int64 ShapeSizeBytes(const Shape& shape);
 
  protected:
+  StatusOr<Literal> Evaluate(const HloComputation& computation,
+                             absl::Span<const Literal> arg_literals) override
+      TF_LOCKS_EXCLUDED(evaluator_lock_);
+
   // The interpreter interprets executables with an HloEvaluator.
-  std::unique_ptr<HloEvaluator> evaluator_ PT_GUARDED_BY(evaluator_lock_);
+  std::unique_ptr<HloEvaluator> evaluator_ TF_PT_GUARDED_BY(evaluator_lock_);
   mutable tensorflow::mutex evaluator_lock_;
 
  private:
+  absl::optional<DynamicDimensionInference> dynamic_dimension_inference_;
   TF_DISALLOW_COPY_AND_ASSIGN(InterpreterExecutable);
 };
 

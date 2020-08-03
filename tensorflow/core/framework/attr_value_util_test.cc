@@ -18,6 +18,7 @@ limitations under the License.
 #include <numeric>
 #include <vector>
 #include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/protobuf.h"
 #include "tensorflow/core/platform/test.h"
@@ -159,12 +160,12 @@ TEST(AttrValueUtil, SummarizeAttrValueDoesNotElideShortLists) {
 }
 
 TEST(AttrValueUtil, SummarizeAttrValueElidesLongLists) {
-  std::vector<int> alist(30);
+  std::vector<int> alist(60);
   std::iota(alist.begin(), alist.end(), 0);
 
   AttrValue attr_value;
   SetAttrValue(alist, &attr_value);
-  EXPECT_EQ("[0, 1, 2, 3, 4, ..., 25, 26, 27, 28, 29]",
+  EXPECT_EQ("[0, 1, 2, 3, 4, ..., 55, 56, 57, 58, 59]",
             SummarizeAttrValue(attr_value));
 }
 

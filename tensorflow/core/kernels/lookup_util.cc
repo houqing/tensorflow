@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/lookup_util.h"
 
+#include "tensorflow/core/framework/dataset.h"
+#include "tensorflow/core/framework/function_handle_cache.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/lib/core/errors.h"
@@ -130,7 +133,8 @@ class TextFileLineIterator
     std::vector<string> tokens;
     if (!ignore_split_) {
       tokens = str_util::Split(line, delimiter_);
-      if (std::max(key_index_, value_index_) >= tokens.size()) {
+      if (static_cast<size_t>(std::max(key_index_, value_index_)) >=
+          tokens.size()) {
         status_ = errors::InvalidArgument(
             "Invalid number of columns in ", filename_, " line ", next_id_,
             " (", line, ") : expected ", std::max(key_index_, value_index_),
@@ -163,7 +167,7 @@ class TextFileLineIterator
 
   int64 total_size() const override {
     if (vocab_size_ == -1) {
-      int64 new_size;
+      int64 new_size = -1;
       Status status = GetNumLinesInTextFile(env_, filename_, &new_size);
       if (!status.ok()) {
         LOG(WARNING) << "Unable to get line count: " << status;
@@ -238,11 +242,12 @@ class TextFileLineIterator
         tensor->flat<double>()(0) = value;
       } break;
       case DT_STRING:
-        tensor->flat<string>()(0) = token;
+        tensor->flat<tstring>()(0) = token;
         break;
       default:
         valid_ = false;
-        return errors::InvalidArgument("Data type ", dtype, " not supported.");
+        return errors::InvalidArgument("Data type ", DataTypeString(dtype),
+                                       " not supported.");
     }
     return Status::OK();
   }
@@ -250,7 +255,7 @@ class TextFileLineIterator
   TF_DISALLOW_COPY_AND_ASSIGN(TextFileLineIterator);
 };
 
-Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
+Status GetTableHandle(StringPiece input_name, OpKernelContext* ctx,
                       string* container, string* table_handle) {
   {
     mutex* mu;
@@ -263,7 +268,7 @@ Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
           "Lookup table handle must be scalar, but had shape: ",
           tensor.shape().DebugString());
     }
-    auto h = tensor.flat<string>();
+    auto h = tensor.flat<tstring>();
     *container = h(0);
     *table_handle = h(1);
   }
@@ -272,25 +277,35 @@ Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
 
 }  // namespace
 
-Status GetLookupTable(const string& input_name, OpKernelContext* ctx,
-                      LookupInterface** table) {
+Status GetResourceLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                              LookupInterface** table) {
+  const Tensor* handle_tensor;
+  TF_RETURN_IF_ERROR(ctx->input(input_name, &handle_tensor));
+  const ResourceHandle& handle = handle_tensor->scalar<ResourceHandle>()();
+  return LookupResource(ctx, handle, table);
+}
+
+Status GetReferenceLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                               LookupInterface** table) {
   string container;
   string table_handle;
+  TF_RETURN_IF_ERROR(
+      GetTableHandle(input_name, ctx, &container, &table_handle));
+  return ctx->resource_manager()->Lookup(container, table_handle, table);
+}
+
+Status GetLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                      LookupInterface** table) {
   DataType handle_dtype;
   TF_RETURN_IF_ERROR(ctx->input_dtype(input_name, &handle_dtype));
   if (handle_dtype == DT_RESOURCE) {
-    ResourceHandle handle;
-    TF_RETURN_IF_ERROR(HandleFromInput(ctx, input_name, &handle));
-    return LookupResource(ctx, handle, table);
+    return GetResourceLookupTable(input_name, ctx, table);
   } else {
-    TF_RETURN_IF_ERROR(
-        GetTableHandle(input_name, ctx, &container, &table_handle));
-    return ctx->resource_manager()->Lookup(container, table_handle, table);
+    return GetReferenceLookupTable(input_name, ctx, table);
   }
 }
 
-Status GetInitializableLookupTable(const string& input_name,
-                                   OpKernelContext* ctx,
+Status GetInitializableLookupTable(StringPiece input_name, OpKernelContext* ctx,
                                    InitializableLookupTable** table) {
   LookupInterface* lookup_table;
   DataType handle_dtype;
@@ -326,8 +341,10 @@ Status CheckTableDataTypes(const LookupInterface& table, DataType key_dtype,
                            DataType value_dtype, const string& table_name) {
   if (table.key_dtype() != key_dtype || table.value_dtype() != value_dtype) {
     return errors::InvalidArgument(
-        "Conflicting key/value dtypes ", key_dtype, "->", value_dtype, " with ",
-        table.key_dtype(), "-", table.value_dtype(), " for table ", table_name);
+        "Conflicting key/value dtypes ", DataTypeString(key_dtype), "->",
+        DataTypeString(value_dtype), " with ",
+        DataTypeString(table.key_dtype()), "-",
+        DataTypeString(table.value_dtype()), " for table ", table_name);
   }
   return Status::OK();
 }
@@ -340,7 +357,7 @@ Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
   if (key_index == kLineNumber && table->key_dtype() != DT_INT64) {
     return errors::InvalidArgument(
         "Key index for line number requires table key dtype of int64, got ",
-        table->key_dtype());
+        DataTypeString(table->key_dtype()));
   }
   const DataType& key_dtype = table->key_dtype();
   const DataType& value_dtype = table->value_dtype();
@@ -348,17 +365,17 @@ Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
       key_dtype != DT_STRING) {
     return errors::InvalidArgument(
         "Key index for whole line requires string or integer table key, got ",
-        table->key_dtype());
+        DataTypeString(table->key_dtype()));
   }
   if (value_index == kLineNumber && value_dtype != DT_INT64) {
     return errors::InvalidArgument(
         "Value index for line number requires table value dtype of int64, got ",
-        table->value_dtype());
+        DataTypeString(table->value_dtype()));
   }
   if (value_index == kWholeLine && value_dtype != DT_STRING) {
     return errors::InvalidArgument(
         "Value index for whole line requires table value dtype of string, got ",
-        table->value_dtype());
+        DataTypeString(table->value_dtype()));
   }
 
   TextFileLineIterator iter;
@@ -375,6 +392,105 @@ Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
     return Status::OK();
   }
   return s;
+}
+
+class DatasetIterator : public InitializableLookupTable::InitTableIterator {
+ public:
+  explicit DatasetIterator(DatasetBase* dataset) : dataset_(dataset) {}
+
+  ~DatasetIterator() override {}
+
+  Status Init(OpKernelContext* ctx) {
+    IteratorContext::Params params(ctx);
+    function_handle_cache_ =
+        absl::make_unique<data::FunctionHandleCache>(params.flr);
+    params.function_handle_cache = function_handle_cache_.get();
+    params.resource_mgr = &resource_mgr_;
+    cancellation_manager_ =
+        absl::make_unique<CancellationManager>(ctx->cancellation_manager());
+    params.cancellation_manager = cancellation_manager_.get();
+    iterator_ctx_ = absl::make_unique<IteratorContext>(std::move(params));
+    TF_RETURN_IF_ERROR(dataset_->MakeIterator(iterator_ctx_.get(), nullptr,
+                                              "LookupTable", &iterator_));
+    Next();
+    return Status::OK();
+  }
+
+  void Next() override {
+    bool end_of_input;
+    tensors_.clear();
+    status_ = iterator_->GetNext(iterator_ctx_.get(), &tensors_, &end_of_input);
+    if (status_.ok() && end_of_input) {
+      status_ = errors::OutOfRange("end of iterator");
+    }
+  }
+
+  bool Valid() const override { return status_.ok(); }
+
+  const Tensor& keys() const override { return tensors_[0]; }
+
+  const Tensor& values() const override { return tensors_[1]; }
+
+  Status status() const override { return status_; }
+
+  int64 total_size() const override {
+    int64 size = dataset_->Cardinality();
+    if (size < 0) {
+      return 0;
+    }
+    return size;
+  }
+
+ private:
+  DatasetBase* dataset_;  // not owned.
+  std::unique_ptr<IteratorContext> iterator_ctx_;
+  std::unique_ptr<data::FunctionHandleCache> function_handle_cache_;
+  ResourceMgr resource_mgr_;
+  std::unique_ptr<CancellationManager> cancellation_manager_;
+  std::unique_ptr<IteratorBase> iterator_;
+  std::vector<Tensor> tensors_;
+  Status status_;
+};
+
+void InitializeTableFromDataset(OpKernelContext* ctx,
+                                data::DatasetBase* dataset,
+                                InitializableLookupTable* table,
+                                AsyncOpKernel::DoneCallback done) {
+  // Construct the cleanup before `iter` below so that `iter` is destroyed
+  // before calling `done`.
+  auto cleanup = gtl::MakeCleanup([done = std::move(done)]() { done(); });
+  // Assert that the dataset types match up to that expected in the table.
+  const auto& dataset_types = dataset->output_dtypes();
+  OP_REQUIRES(
+      ctx, dataset_types.size() == 2,
+      errors::InvalidArgument("Dataset should have two output types only"));
+  OP_REQUIRES(ctx, dataset_types[0] == table->key_dtype(),
+              errors::InvalidArgument(
+                  "Key dtype expected: ", table->key_dtype(),
+                  " but obtained: ", dataset_types[0], " from the dataset"));
+  OP_REQUIRES(ctx, dataset_types[1] == table->value_dtype(),
+              errors::InvalidArgument(
+                  "Value dtype expected: ", table->value_dtype(),
+                  " but obtained: ", dataset_types[1], " from the dataset"));
+  // Assert that the dataset output shapes are scalars.
+  const auto& dataset_shapes = dataset->output_shapes();
+  OP_REQUIRES(
+      ctx, dataset_shapes.size() == 2,
+      errors::InvalidArgument("Dataset should have two output shapes only"));
+  OP_REQUIRES(ctx, dataset_shapes[0].IsCompatibleWith(PartialTensorShape({})),
+              errors::InvalidArgument("Expected scalar for key. Obtained: ",
+                                      dataset_shapes[0].DebugString()));
+  OP_REQUIRES(ctx, dataset_shapes[1].IsCompatibleWith(PartialTensorShape({})),
+              errors::InvalidArgument("Expected scalar for key. Obtained: ",
+                                      dataset_shapes[1].DebugString()));
+  DatasetIterator iter(dataset);
+  OP_REQUIRES_OK(ctx, iter.Init(ctx));
+  Status s = table->Initialize(iter);
+  if (errors::IsFailedPrecondition(s) && table->is_initialized()) {
+    LOG(INFO) << "Table already initialized from dataset.";
+    return;
+  }
+  ctx->SetStatus(s);
 }
 
 }  // namespace lookup

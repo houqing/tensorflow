@@ -72,6 +72,9 @@ class Cluster {
   // before Provision().
   void SetNumWarmupSteps(int num_steps);
 
+  // Set executor type to instantiate
+  void SetExecutorType(const string* executor_type);
+
   // Returns the number of warmup steps.
   int NumWarmupSteps() const;
 
@@ -124,6 +127,11 @@ class Cluster {
                      const std::vector<std::pair<string, Tensor>>& feed,
                      const std::vector<string>& fetch,
                      RunMetadata* metadata) = 0;
+
+  // Run the specified GrapplerItem and return the corresponding metadata.
+  virtual Status Run(const GrapplerItem& item, RunMetadata* metadata) {
+    return Run(item.graph, item.feed, item.fetch, metadata);
+  }
 
  protected:
   std::unordered_map<string, DeviceProperties> devices_;

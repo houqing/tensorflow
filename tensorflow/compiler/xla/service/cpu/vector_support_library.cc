@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "tensorflow/compiler/xla/service/cpu/vector_support_library.h"
 
+#include "absl/algorithm/container.h"
 #include "llvm/Support/raw_ostream.h"
 #include "tensorflow/compiler/xla/service/cpu/target_machine_features.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
@@ -79,10 +80,11 @@ llvm::Value* VectorSupportLibrary::Sub(llvm::Value* lhs, llvm::Value* rhs) {
   return b()->CreateFSub(lhs, rhs);
 }
 
-llvm::Value* VectorSupportLibrary::Max(llvm::Value* lhs, llvm::Value* rhs) {
+llvm::Value* VectorSupportLibrary::Max(llvm::Value* lhs, llvm::Value* rhs,
+                                       bool enable_fast_min_max) {
   AssertCorrectTypes({lhs, rhs});
   if (scalar_type_->isFloatingPointTy()) {
-    return llvm_ir::EmitFloatMax(lhs, rhs, b_);
+    return llvm_ir::EmitFloatMax(lhs, rhs, b_, enable_fast_min_max);
   } else {
     LOG(FATAL) << "Max for integers is unimplemented";
   }
@@ -106,13 +108,19 @@ llvm::Value* VectorSupportLibrary::Div(llvm::Value* lhs, llvm::Value* rhs) {
 llvm::Value* VectorSupportLibrary::Clamp(llvm::Value* a,
                                          const llvm::APFloat& low,
                                          const llvm::APFloat& high) {
+  CHECK(!low.isNaN());
+  CHECK(!high.isNaN());
+  CHECK(low.compare(high) == llvm::APFloat::cmpLessThan);
+
   AssertCorrectTypes({a});
   llvm::Type* type = a->getType();
-  CHECK(low.compare(high) == llvm::APFloat::cmpLessThan);
   CHECK(scalar_type_->isFloatingPointTy());
-  return llvm_ir::EmitFloatMin(
-      llvm_ir::EmitFloatMax(a, GetConstantFloat(type, low), b_),
-      GetConstantFloat(type, high), b_);
+
+  llvm::Value* low_value = GetConstantFloat(type, low);
+  llvm::Value* high_value = GetConstantFloat(type, high);
+  a = b_->CreateSelect(b_->CreateFCmpUGE(a, low_value), a, low_value);
+  a = b_->CreateSelect(b_->CreateFCmpULE(a, high_value), a, high_value);
+  return a;
 }
 
 llvm::Value* VectorSupportLibrary::FCmpEQMask(llvm::Value* lhs,
@@ -422,12 +430,12 @@ TileVariable::TileVariable(VectorSupportLibrary* vector_support,
 
 std::vector<llvm::Value*> TileVariable::Get() const {
   std::vector<llvm::Value*> result;
-  c_transform(storage_, std::back_inserter(result),
-              [&](VectorVariable vect_var) { return vect_var.Get(); });
+  absl::c_transform(storage_, std::back_inserter(result),
+                    [&](VectorVariable vect_var) { return vect_var.Get(); });
   return result;
 }
 
-void TileVariable::Set(tensorflow::gtl::ArraySlice<llvm::Value*> value) {
+void TileVariable::Set(absl::Span<llvm::Value* const> value) {
   CHECK_EQ(value.size(), storage_.size());
   for (int64 i = 0, e = value.size(); i < e; i++) {
     storage_[i].Set(value[i]);

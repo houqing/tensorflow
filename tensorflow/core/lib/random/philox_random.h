@@ -17,15 +17,15 @@ limitations under the License.
 // Salmon et al. SC 2011. Parallel random numbers: as easy as 1, 2, 3.
 //   http://www.thesalmons.org/john/random123/papers/random123sc11.pdf
 
-#ifndef TENSORFLOW_LIB_RANDOM_PHILOX_RANDOM_H_
-#define TENSORFLOW_LIB_RANDOM_PHILOX_RANDOM_H_
+#ifndef TENSORFLOW_CORE_LIB_RANDOM_PHILOX_RANDOM_H_
+#define TENSORFLOW_CORE_LIB_RANDOM_PHILOX_RANDOM_H_
 
 #include <stdlib.h>
 
 #include "tensorflow/core/platform/types.h"
 
 // Function qualifiers that need to work on both CPU and GPU.
-#if defined(__CUDACC__)
+#if defined(__CUDACC__) || defined(__HIPCC__)
 // For nvcc.
 #define PHILOX_DEVICE_FUNC __host__ __device__
 #define PHILOX_INLINE __inline__
@@ -49,6 +49,7 @@ namespace random {
 template <typename T, int ElementCount>
 class Array {
  public:
+  static constexpr int kElementCount = ElementCount;
   PHILOX_DEVICE_INLINE Array() {
     for (int i = 0; i < ElementCount; ++i) {
       data_[i] = T(0);
@@ -104,9 +105,9 @@ class PhiloxRandom {
   using ResultType = Array<uint32, 4>;
   using ResultElementType = uint32;
   // The number of elements that will be returned.
-  static const int kResultElementCount = 4;
+  static constexpr int kResultElementCount = 4;
   // Cost of generation of a single element (in cycles).
-  static const int kElementCost = 10;
+  static constexpr int kElementCost = 10;
   // The type for the 64-bit key stored in the form of two 32-bit uint
   // that are used in the diffusion process.
   using Key = Array<uint32, 2>;
@@ -130,6 +131,12 @@ class PhiloxRandom {
 
   PHILOX_DEVICE_INLINE
   PhiloxRandom(ResultType counter, Key key) : counter_(counter), key_(key) {}
+
+  PHILOX_DEVICE_INLINE
+  ResultType const& counter() const { return counter_; }
+
+  PHILOX_DEVICE_INLINE
+  Key const& key() const { return key_; }
 
   // Skip the specified number of samples of 128-bits in the current stream.
   PHILOX_DEVICE_INLINE
@@ -185,10 +192,10 @@ class PhiloxRandom {
 
  private:
   // We use the same constants as recommended by the original paper.
-  static const uint32 kPhiloxW32A = 0x9E3779B9;
-  static const uint32 kPhiloxW32B = 0xBB67AE85;
-  static const uint32 kPhiloxM4x32A = 0xD2511F53;
-  static const uint32 kPhiloxM4x32B = 0xCD9E8D57;
+  static constexpr uint32 kPhiloxW32A = 0x9E3779B9;
+  static constexpr uint32 kPhiloxW32B = 0xBB67AE85;
+  static constexpr uint32 kPhiloxM4x32A = 0xD2511F53;
+  static constexpr uint32 kPhiloxM4x32B = 0xCD9E8D57;
 
   // Helper function to skip the next sample of 128-bits in the current stream.
   PHILOX_DEVICE_INLINE void SkipOne() {
@@ -248,4 +255,4 @@ class PhiloxRandom {
 }  // namespace random
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_LIB_RANDOM_PHILOX_RANDOM_H_
+#endif  // TENSORFLOW_CORE_LIB_RANDOM_PHILOX_RANDOM_H_

@@ -14,21 +14,26 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/platform/human_readable_json.h"
-#include "tensorflow/core/lib/core/errors.h"
-#include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/lib/strings/strcat.h"
+
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/strcat.h"
 
 namespace tensorflow {
 
-Status ProtoToHumanReadableJson(const ::google::protobuf::Message& proto,
-                                string* result) {
+Status ProtoToHumanReadableJson(const protobuf::Message& proto, string* result,
+                                bool ignore_accuracy_loss) {
   result->clear();
 
-  auto status = google::protobuf::util::MessageToJsonString(proto, result);
+  protobuf::util::JsonPrintOptions json_options;
+  json_options.preserve_proto_field_names = true;
+  json_options.always_print_primitive_fields = true;
+  auto status =
+      protobuf::util::MessageToJsonString(proto, result, json_options);
   if (!status.ok()) {
     // Convert error_msg google::protobuf::StringPiece to
     // tensorflow::StringPiece.
-    auto error_msg = status.error_message();
+    auto error_msg = status.message();
     return errors::Internal(
         strings::StrCat("Could not convert proto to JSON string: ",
                         StringPiece(error_msg.data(), error_msg.length())));
@@ -36,19 +41,29 @@ Status ProtoToHumanReadableJson(const ::google::protobuf::Message& proto,
   return Status::OK();
 }
 
-Status HumanReadableJsonToProto(const string& str,
-                                ::google::protobuf::Message* proto) {
+Status ProtoToHumanReadableJson(const protobuf::MessageLite& proto,
+                                string* result, bool ignore_accuracy_loss) {
+  *result = "[human readable output not available for lite protos]";
+  return Status::OK();
+}
+
+Status HumanReadableJsonToProto(const string& str, protobuf::Message* proto) {
   proto->Clear();
-  auto status = google::protobuf::util::JsonStringToMessage(str, proto);
+  auto status = protobuf::util::JsonStringToMessage(str, proto);
   if (!status.ok()) {
     // Convert error_msg google::protobuf::StringPiece to
     // tensorflow::StringPiece.
-    auto error_msg = status.error_message();
+    auto error_msg = status.message();
     return errors::Internal(
         strings::StrCat("Could not convert JSON string to proto: ",
                         StringPiece(error_msg.data(), error_msg.length())));
   }
   return Status::OK();
+}
+
+Status HumanReadableJsonToProto(const string& str,
+                                protobuf::MessageLite* proto) {
+  return errors::Internal("Cannot parse JSON protos on Android");
 }
 
 }  // namespace tensorflow

@@ -16,8 +16,8 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "absl/memory/memory.h"
 #include "tensorflow/compiler/xla/literal.h"
-#include "tensorflow/compiler/xla/ptr_util.h"
 #include "tensorflow/compiler/xla/service/gpu/tests/gpu_codegen_test.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
@@ -47,20 +47,13 @@ TEST_F(GpuNoAliasTest, Concat) {
 
   std::unique_ptr<HloComputation> computation = builder.Build();
 
-  auto hlo_module = CreateNewModule();
+  auto hlo_module = CreateNewVerifiedModule();
   hlo_module->AddEntryComputation(std::move(computation));
 
   CompileAndVerifyIr(std::move(hlo_module),
-                     R"(
-; CHECK: %[[x_gep:.*]] = getelementptr inbounds [2 x [2 x float]], [2 x [2 x float]]* %x{{.*}}, i32 0
-; CHECK: load float, float* %[[x_gep]], {{.*}}, !noalias ![[param_noalias:.*]]
-; CHECK: %[[y_gep:.*]] = getelementptr inbounds [2 x [2 x float]], [2 x [2 x float]]* %y{{.*}}, i32 0
-; CHECK: load float, float* %[[y_gep]], {{.*}}, !noalias ![[param_noalias]]
-; CHECK: %[[result_ptr:.*]] = bitcast [2 x [6 x float]]* %fusion{{.*}} to float*
-; CHECK: %[[result_gep:.*]] = getelementptr inbounds float, float* %[[result_ptr]]
-; CHECK: store float {{.*}}, float* %[[result_gep]], !alias.scope ![[param_noalias]]
-; CHECK: ![[param_noalias]] = !{![[retval_buffer:.*]]}
-      )",
+                     R"(CHECK-LABEL: define void @fusion
+                        CHECK-SAME: i8* noalias align {{[0-9]*}} dereferenceable({{[0-9]*}}) %[[OUTPUT_ALLOC:[a-z0-9]*]]
+                        CHECK: %fusion.raw = {{.*}} %[[OUTPUT_ALLOC]])",
                      /*match_optimized_ir=*/false);
 }
 

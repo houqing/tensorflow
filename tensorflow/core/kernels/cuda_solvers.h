@@ -14,24 +14,32 @@ limitations under the License.
 ==============================================================================
 */
 
+#ifndef TENSORFLOW_CORE_KERNELS_CUDA_SOLVERS_H_
+#define TENSORFLOW_CORE_KERNELS_CUDA_SOLVERS_H_
+
 // This header declares the class CudaSolver, which contains wrappers of linear
 // algebra solvers in the cuBlas and cuSolverDN libraries for use in TensorFlow
 // kernels.
 
-#ifdef GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #include <functional>
 #include <vector>
 
-#include "cuda/include/cublas_v2.h"
-#include "cuda/include/cusolverDn.h"
+#if GOOGLE_CUDA
+#include "third_party/gpus/cuda/include/cublas_v2.h"
+#include "third_party/gpus/cuda/include/cuda.h"
+#include "third_party/gpus/cuda/include/cusolverDn.h"
+#endif
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_reference.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/stream_executor.h"
 
 namespace tensorflow {
 
+#if GOOGLE_CUDA
 // Type traits to get CUDA complex types from std::complex<T>.
 template <typename T>
 struct CUDAComplexT {
@@ -161,14 +169,16 @@ class CudaSolver {
   // to the underlying Tensor to prevent it from being deallocated prematurely.
   template <typename Scalar>
   ScratchSpace<Scalar> GetScratchSpace(const TensorShape& shape,
-                                       const string& debug_info, bool on_host);
+                                       const std::string& debug_info,
+                                       bool on_host);
   template <typename Scalar>
-  ScratchSpace<Scalar> GetScratchSpace(int64 size, const string& debug_info,
+  ScratchSpace<Scalar> GetScratchSpace(int64 size,
+                                       const std::string& debug_info,
                                        bool on_host);
   // Returns a DeviceLapackInfo that will live for the duration of the
   // CudaSolver object.
   inline DeviceLapackInfo GetDeviceLapackInfo(int64 size,
-                                              const string& debug_info);
+                                              const std::string& debug_info);
 
   // Allocates a temporary tensor that will live for the duration of the
   // CudaSolver object.
@@ -202,12 +212,24 @@ class CudaSolver {
               const Scalar* B, int ldb, Scalar* C,
               int ldc) const TF_MUST_USE_RESULT;
 
-  // Computes the Cholesky factorization A = L * L^T for a single matrix.
+  // Computes the Cholesky factorization A = L * L^H for a single matrix.
   // Returns Status::OK() if the kernel was launched successfully. See:
   // http://docs.nvidia.com/cuda/cusolver/#cuds-lt-t-gt-potrf
   template <typename Scalar>
   Status Potrf(cublasFillMode_t uplo, int n, Scalar* dev_A, int lda,
                int* dev_lapack_info) TF_MUST_USE_RESULT;
+
+#if CUDA_VERSION >= 9020
+  // Computes the Cholesky factorization A = L * L^H for a batch of small
+  // matrices.
+  // Returns Status::OK() if the kernel was launched successfully. See:
+  // http://docs.nvidia.com/cuda/cusolver/index.html#cuds-lt-t-gt-potrfBatched
+  template <typename Scalar>
+  Status PotrfBatched(cublasFillMode_t uplo, int n,
+                      const Scalar* const host_a_dev_ptrs[], int lda,
+                      DeviceLapackInfo* dev_lapack_info,
+                      int batch_size) TF_MUST_USE_RESULT;
+#endif  // CUDA_VERSION >= 9020
 
   // LU factorization.
   // Computes LU factorization with partial pivoting P * A = L * U.
@@ -224,7 +246,7 @@ class CudaSolver {
                int* dev_lapack_info) const TF_MUST_USE_RESULT;
 
   // Computes partially pivoted LU factorizations for a batch of small matrices.
-  // Returns Status::OK() if the kernel was launched successfully.See:
+  // Returns Status::OK() if the kernel was launched successfully. See:
   // http://docs.nvidia.com/cuda/cublas/index.html#cublas-lt-t-gt-getrfbatched
   template <typename Scalar>
   Status GetrfBatched(int n, const Scalar* const host_a_dev_ptrs[], int lda,
@@ -232,13 +254,14 @@ class CudaSolver {
                       int batch_size) TF_MUST_USE_RESULT;
 
   // Batched linear solver using LU factorization from getrfBatched.
-  // See:
+  // Notice that lapack_info is returned on the host, as opposed to
+  // most of the other functions that return it on the device. See:
   // http://docs.nvidia.com/cuda/cublas/index.html#cublas-lt-t-gt-getrsbatched
   template <typename Scalar>
   Status GetrsBatched(cublasOperation_t trans, int n, int nrhs,
                       const Scalar* const dev_Aarray[], int lda,
                       const int* devIpiv, const Scalar* const dev_Barray[],
-                      int ldb, DeviceLapackInfo* dev_lapack_info,
+                      int ldb, int* host_lapack_info,
                       int batch_size) TF_MUST_USE_RESULT;
 
   // Computes matrix inverses for a batch of small matrices. Uses the outputs
@@ -308,6 +331,34 @@ class CudaSolver {
   Status Gesvd(signed char jobu, signed char jobvt, int m, int n, Scalar* dev_A,
                int lda, Scalar* dev_S, Scalar* dev_U, int ldu, Scalar* dev_VT,
                int ldvt, int* dev_lapack_info) TF_MUST_USE_RESULT;
+  template <typename Scalar>
+  Status GesvdjBatched(cusolverEigMode_t jobz, int m, int n, Scalar* dev_A,
+                       int lda, Scalar* dev_S, Scalar* dev_U, int ldu,
+                       Scalar* dev_V, int ldv, int* dev_lapack_info,
+                       int batch_size);
+
+  // Triangular solve
+  // Returns Status::OK() if the kernel was launched successfully.
+  // See https://docs.nvidia.com/cuda/cublas/index.html#cublas-lt-t-gt-trsm
+  template <typename Scalar>
+  Status Trsm(cublasSideMode_t side, cublasFillMode_t uplo,
+              cublasOperation_t trans, cublasDiagType_t diag, int m, int n,
+              const Scalar* alpha, const Scalar* A, int lda, Scalar* B,
+              int ldb);
+
+  template <typename Scalar>
+  Status Trsv(cublasFillMode_t uplo, cublasOperation_t trans,
+              cublasDiagType_t diag, int n, const Scalar* A, int lda, Scalar* x,
+              int intcx);
+
+  // See
+  // https://docs.nvidia.com/cuda/cublas/index.html#cublas-lt-t-gt-trsmbatched
+  template <typename Scalar>
+  Status TrsmBatched(cublasSideMode_t side, cublasFillMode_t uplo,
+                     cublasOperation_t trans, cublasDiagType_t diag, int m,
+                     int n, const Scalar* alpha,
+                     const Scalar* const dev_Aarray[], int lda,
+                     Scalar* dev_Barray[], int ldb, int batch_size);
 
  private:
   OpKernelContext* context_;  // not owned.
@@ -318,6 +369,7 @@ class CudaSolver {
 
   TF_DISALLOW_COPY_AND_ASSIGN(CudaSolver);
 };
+#endif  // GOOGLE_CUDA
 
 // Helper class to allocate scratch memory and keep track of debug info.
 // Mostly a thin wrapper around Tensor & allocate_temp.
@@ -327,12 +379,12 @@ class ScratchSpace {
   ScratchSpace(OpKernelContext* context, int64 size, bool on_host)
       : ScratchSpace(context, TensorShape({size}), "", on_host) {}
 
-  ScratchSpace(OpKernelContext* context, int64 size, const string& debug_info,
-               bool on_host)
+  ScratchSpace(OpKernelContext* context, int64 size,
+               const std::string& debug_info, bool on_host)
       : ScratchSpace(context, TensorShape({size}), debug_info, on_host) {}
 
   ScratchSpace(OpKernelContext* context, const TensorShape& shape,
-               const string& debug_info, bool on_host)
+               const std::string& debug_info, bool on_host)
       : context_(context), debug_info_(debug_info), on_host_(on_host) {
     AllocatorAttributes alloc_attr;
     if (on_host) {
@@ -361,7 +413,7 @@ class ScratchSpace {
   }
   int64 bytes() const { return scratch_tensor_.TotalBytes(); }
   int64 size() const { return scratch_tensor_.NumElements(); }
-  const string& debug_info() const { return debug_info_; }
+  const std::string& debug_info() const { return debug_info_; }
 
   Tensor& tensor() { return scratch_tensor_; }
   const Tensor& tensor() const { return scratch_tensor_; }
@@ -374,21 +426,22 @@ class ScratchSpace {
 
  private:
   OpKernelContext* context_;  // not owned
-  const string debug_info_;
+  const std::string debug_info_;
   const bool on_host_;
   Tensor scratch_tensor_;
 };
 
 class HostLapackInfo : public ScratchSpace<int> {
  public:
-  HostLapackInfo(OpKernelContext* context, int64 size, const string& debug_info)
+  HostLapackInfo(OpKernelContext* context, int64 size,
+                 const std::string& debug_info)
       : ScratchSpace<int>(context, size, debug_info, /* on_host */ true){};
 };
 
 class DeviceLapackInfo : public ScratchSpace<int> {
  public:
   DeviceLapackInfo(OpKernelContext* context, int64 size,
-                   const string& debug_info)
+                   const std::string& debug_info)
       : ScratchSpace<int>(context, size, debug_info, /* on_host */ false) {}
 
   // Allocates a new scratch space on the host and launches a copy of the
@@ -407,9 +460,10 @@ class DeviceLapackInfo : public ScratchSpace<int> {
   }
 };
 
+#if GOOGLE_CUDA
 template <typename Scalar>
 ScratchSpace<Scalar> CudaSolver::GetScratchSpace(const TensorShape& shape,
-                                                 const string& debug_info,
+                                                 const std::string& debug_info,
                                                  bool on_host) {
   ScratchSpace<Scalar> new_scratch_space(context_, shape, debug_info, on_host);
   scratch_tensor_refs_.emplace_back(new_scratch_space.tensor());
@@ -418,18 +472,21 @@ ScratchSpace<Scalar> CudaSolver::GetScratchSpace(const TensorShape& shape,
 
 template <typename Scalar>
 ScratchSpace<Scalar> CudaSolver::GetScratchSpace(int64 size,
-                                                 const string& debug_info,
+                                                 const std::string& debug_info,
                                                  bool on_host) {
   return GetScratchSpace<Scalar>(TensorShape({size}), debug_info, on_host);
 }
 
 inline DeviceLapackInfo CudaSolver::GetDeviceLapackInfo(
-    int64 size, const string& debug_info) {
+    int64 size, const std::string& debug_info) {
   DeviceLapackInfo new_dev_info(context_, size, debug_info);
   scratch_tensor_refs_.emplace_back(new_dev_info.tensor());
   return new_dev_info;
 }
+#endif  // GOOGLE_CUDA
 
 }  // namespace tensorflow
 
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+
+#endif  // TENSORFLOW_CORE_KERNELS_CUDA_SOLVERS_H_

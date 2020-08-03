@@ -18,6 +18,9 @@ limitations under the License.
 
 namespace tensorflow {
 
+// Adjust value in third_party/tensorflow/python/client/tf_session_wrapper.cc
+// in the get_tensor_handle_key function if adjusting the value for
+// kTensorHandleResourceTypeName.
 const char* SessionState::kTensorHandleResourceTypeName = "TensorHandle";
 
 Status SessionState::GetTensor(const string& handle, Tensor* tensor) {
@@ -60,6 +63,7 @@ Status TensorStore::AddTensor(const string& name, const TensorAndKey& tk) {
     return errors::InvalidArgument("Failed to add a tensor with name '", name,
                                    "' to the tensor store.");
   }
+  dirty_ = true;
   return Status::OK();
 }
 
@@ -70,7 +74,7 @@ Status TensorStore::SaveTensors(const std::vector<string>& output_names,
     // Save only the tensors in output_names in the session.
     for (const string& name : output_names) {
       TensorId id(ParseTensorName(name));
-      const string& op_name = std::string(id.first);
+      const string op_name(id.first);
       auto it = tensors_.find(op_name);
       if (it != tensors_.end()) {
         // Save the tensor to the session state.

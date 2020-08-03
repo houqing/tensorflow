@@ -18,13 +18,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import time
 import timeit
 
 import numpy as np
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
-from tensorflow.contrib import rnn as contrib_rnn
 from tensorflow.core.protobuf import config_pb2
 from tensorflow.python.client import session
 from tensorflow.python.eager import context
@@ -46,6 +46,7 @@ import tensorflow.python.ops.nn_grad  # pylint: disable=unused-import
 import tensorflow.python.ops.sparse_grad  # pylint: disable=unused-import
 import tensorflow.python.ops.tensor_array_grad  # pylint: disable=unused-import
 from tensorflow.python.platform import test
+from tensorflow.python.training import saver
 
 
 class Plus1RNNCell(rnn_cell_impl.RNNCell):
@@ -134,12 +135,32 @@ class RNNTest(test.TestCase):
       inputs = [constant_op.constant(np.ones((3, 4)))]
     else:
       inputs = [array_ops.placeholder(dtypes.float32, shape=(3, 4))]
-    with self.assertRaisesRegexp(ValueError, "must be a vector"):
+    with self.assertRaisesRegex(ValueError, "must be a vector"):
       rnn.dynamic_rnn(
           cell,
           array_ops.stack(inputs),
           dtype=dtypes.float32,
           sequence_length=[[4]])
+
+  @test_util.run_in_graph_and_eager_modes
+  def testInvalidDtype(self):
+    if context.executing_eagerly():
+      inputs = np.zeros((3, 4, 5), dtype=np.int32)
+    else:
+      inputs = array_ops.placeholder(dtypes.int32, shape=(3, 4, 5))
+
+    cells = [
+        rnn_cell_impl.BasicRNNCell,
+        rnn_cell_impl.GRUCell,
+        rnn_cell_impl.BasicLSTMCell,
+        rnn_cell_impl.LSTMCell,
+    ]
+    for cell_cls in cells:
+      with self.cached_session():
+        with self.assertRaisesRegex(ValueError,
+                                    "RNN cell only supports floating"):
+          cell = cell_cls(2, dtype=dtypes.int32)
+          rnn.dynamic_rnn(cell, inputs, dtype=dtypes.int32)
 
   @test_util.run_in_graph_and_eager_modes
   def testBatchSizeFromInput(self):
@@ -171,15 +192,15 @@ class RNNTest(test.TestCase):
       inputs = array_ops.placeholder(dtypes.float32, shape=(None, 4, 5))
       # - Without initial_state
       outputs, state = rnn.dynamic_rnn(cell, inputs, dtype=dtypes.float32)
-      self.assertEqual(None, outputs.shape[0].value)
-      self.assertEqual(None, state.shape[0].value)
+      self.assertEqual(None, outputs.shape.dims[0].value)
+      self.assertEqual(None, state.shape.dims[0].value)
       # - With initial_state
       outputs, state = rnn.dynamic_rnn(
           cell,
           inputs,
           initial_state=array_ops.placeholder(dtypes.float32, shape=(None, 5)))
-      self.assertEqual(None, outputs.shape[0].value)
-      self.assertEqual(None, state.shape[0].value)
+      self.assertEqual(None, outputs.shape.dims[0].value)
+      self.assertEqual(None, state.shape.dims[0].value)
 
   @test_util.run_in_graph_and_eager_modes
   def testScalarStateIsAccepted(self):
@@ -191,7 +212,7 @@ class RNNTest(test.TestCase):
     else:
       inputs = array_ops.placeholder(dtypes.float32, shape=(1, 4, 1))
 
-    with self.test_session() as sess:
+    with self.cached_session(use_gpu=True) as sess:
       outputs, state = rnn.dynamic_rnn(
           cell, inputs, dtype=dtypes.float32, sequence_length=[4])
       if not in_eager_mode:
@@ -211,7 +232,7 @@ class RNNTest(test.TestCase):
     else:
       inputs = array_ops.placeholder(dtypes.float32, shape=(1, 4, 1))
 
-    with self.test_session() as sess:
+    with self.cached_session(use_gpu=True) as sess:
       outputs, state = rnn.dynamic_rnn(
           cell, inputs, dtype=dtypes.float32, sequence_length=[4])
       if not in_eager_mode:
@@ -223,7 +244,15 @@ class RNNTest(test.TestCase):
     self.assertAllEqual([[[1, 1], [2, 2], [3, 3], [4, 4]]], outputs[1])
     self.assertAllEqual(4, state)
 
+  @test_util.assert_no_new_pyobjects_executing_eagerly
+  def testEagerMemory(self):
+    with context.eager_mode():
+      cell = TensorArrayStateRNNCell()
+      inputs = np.array([[[1], [2], [3], [4]]], dtype=np.float32)
+      rnn.dynamic_rnn(cell, inputs, dtype=dtypes.float32, sequence_length=[4])
+
   @test_util.run_in_graph_and_eager_modes
+  @test_util.run_v1_only("b/120545219")
   def testTensorArrayStateIsAccepted(self):
     cell = TensorArrayStateRNNCell()
     in_eager_mode = context.executing_eagerly()
@@ -233,7 +262,7 @@ class RNNTest(test.TestCase):
     else:
       inputs = array_ops.placeholder(dtypes.float32, shape=(1, 4, 1))
 
-    with self.test_session() as sess:
+    with self.cached_session(use_gpu=True) as sess:
       outputs, state = rnn.dynamic_rnn(
           cell, inputs, dtype=dtypes.float32, sequence_length=[4])
       state = (state[0], state[1].stack())
@@ -247,12 +276,45 @@ class RNNTest(test.TestCase):
     self.assertAllEqual(4, state[0])
     self.assertAllEqual([[[1]], [[2]], [[3]], [[4]]], state[1])
 
+  @test_util.run_deprecated_v1
+  def testCellGetInitialState(self):
+    cell = rnn_cell_impl.BasicRNNCell(5)
+    with self.assertRaisesRegex(ValueError,
+                                "batch_size and dtype cannot be None"):
+      cell.get_initial_state(None, None, None)
+
+    inputs = array_ops.placeholder(dtypes.float32, shape=(None, 4, 1))
+    with self.assertRaisesRegex(
+        ValueError, "batch size from input tensor is different from"):
+      cell.get_initial_state(inputs=inputs, batch_size=50, dtype=None)
+
+    with self.assertRaisesRegex(
+        ValueError, "batch size from input tensor is different from"):
+      cell.get_initial_state(
+          inputs=inputs, batch_size=constant_op.constant(50), dtype=None)
+
+    with self.assertRaisesRegex(ValueError,
+                                "dtype from input tensor is different from"):
+      cell.get_initial_state(inputs=inputs, batch_size=None, dtype=dtypes.int16)
+
+    initial_state = cell.get_initial_state(
+        inputs=inputs, batch_size=None, dtype=None)
+    self.assertEqual(initial_state.shape.as_list(), [None, 5])
+    self.assertEqual(initial_state.dtype, inputs.dtype)
+
+    batch = array_ops.shape(inputs)[0]
+    dtype = inputs.dtype
+    initial_state = cell.get_initial_state(None, batch, dtype)
+    self.assertEqual(initial_state.shape.as_list(), [None, 5])
+    self.assertEqual(initial_state.dtype, inputs.dtype)
+
   def _assert_cell_builds(self, cell_class, dtype, batch_size, in_size,
                           out_size):
     cell = cell_class(out_size, dtype=dtype)
     in_shape = tensor_shape.TensorShape((batch_size, in_size))
     cell.build(in_shape)
-    state_output = cell.zero_state(batch_size, dtype)
+    state_output = cell.get_initial_state(
+        inputs=None, batch_size=batch_size, dtype=dtype)
     cell_output, _ = cell(array_ops.zeros(in_shape, dtype), state_output)
     self.assertAllEqual([batch_size, out_size], cell_output.shape.as_list())
 
@@ -268,13 +330,31 @@ class RNNTest(test.TestCase):
     self._assert_cell_builds(rnn_cell_impl.GRUCell, f64, 5, 7, 3)
     self._assert_cell_builds(rnn_cell_impl.LSTMCell, f32, 5, 7, 3)
     self._assert_cell_builds(rnn_cell_impl.LSTMCell, f64, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndRNNCell, f32, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndRNNCell, f64, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndyGRUCell, f32, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndyGRUCell, f64, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndyLSTMCell, f32, 5, 7, 3)
-    self._assert_cell_builds(contrib_rnn.IndyLSTMCell, f64, 5, 7, 3)
 
+  @test_util.run_deprecated_v1
+  def testBasicLSTMCellInterchangeWithLSTMCell(self):
+    with self.session(graph=ops_lib.Graph()) as sess:
+      basic_cell = rnn_cell_impl.BasicLSTMCell(1)
+      basic_cell(array_ops.ones([1, 1]),
+                 state=basic_cell.get_initial_state(inputs=None,
+                                                    batch_size=1,
+                                                    dtype=dtypes.float32))
+      self.evaluate([v.initializer for v in basic_cell.variables])
+      self.evaluate(basic_cell._bias.assign([10.] * 4))
+      save = saver.Saver()
+      prefix = os.path.join(self.get_temp_dir(), "ckpt")
+      save_path = save.save(sess, prefix)
+
+    with self.session(graph=ops_lib.Graph()) as sess:
+      lstm_cell = rnn_cell_impl.LSTMCell(1, name="basic_lstm_cell")
+      lstm_cell(array_ops.ones([1, 1]),
+                state=lstm_cell.get_initial_state(inputs=None,
+                                                  batch_size=1,
+                                                  dtype=dtypes.float32))
+      self.evaluate([v.initializer for v in lstm_cell.variables])
+      save = saver.Saver()
+      save.restore(sess, save_path)
+      self.assertAllEqual([10.] * 4, self.evaluate(lstm_cell._bias))
 
 ######### Benchmarking RNN code
 
@@ -282,12 +362,12 @@ class RNNTest(test.TestCase):
 def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = contrib_rnn.LSTMCell(
+  cell = rnn_cell_impl.LSTMCell(
       num_units=input_size,
       use_peepholes=True,
       initializer=initializer,
       state_is_tuple=False)
-  outputs, final_state = contrib_rnn.static_rnn(
+  outputs, final_state = rnn.static_rnn(
       cell,
       inputs_list_t,
       sequence_length=sequence_length,
@@ -304,7 +384,7 @@ def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
 def _static_vs_dynamic_rnn_benchmark_dynamic(inputs_t, sequence_length):
   (unused_0, unused_1, input_size) = inputs_t.get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = contrib_rnn.LSTMCell(
+  cell = rnn_cell_impl.LSTMCell(
       num_units=input_size,
       use_peepholes=True,
       initializer=initializer,
@@ -415,12 +495,12 @@ def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
 def _half_seq_len_vs_unroll_half_rnn_benchmark(inputs_list_t, sequence_length):
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = contrib_rnn.LSTMCell(
+  cell = rnn_cell_impl.LSTMCell(
       num_units=input_size,
       use_peepholes=True,
       initializer=initializer,
       state_is_tuple=False)
-  outputs, final_state = contrib_rnn.static_rnn(
+  outputs, final_state = rnn.static_rnn(
       cell,
       inputs_list_t,
       sequence_length=sequence_length,
@@ -481,12 +561,12 @@ def _concat_state_vs_tuple_state_rnn_benchmark(inputs_list_t, sequence_length,
                                                state_is_tuple):
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = contrib_rnn.LSTMCell(
+  cell = rnn_cell_impl.LSTMCell(
       num_units=input_size,
       use_peepholes=True,
       initializer=initializer,
       state_is_tuple=state_is_tuple)
-  outputs, final_state = contrib_rnn.static_rnn(
+  outputs, final_state = rnn.static_rnn(
       cell,
       inputs_list_t,
       sequence_length=sequence_length,
@@ -548,7 +628,7 @@ def concat_state_vs_tuple_state_rnn_benchmark(batch_size, max_time, num_units,
 def _dynamic_rnn_swap_memory_benchmark(inputs_t, sequence_length, swap_memory):
   (unused_0, unused_1, input_size) = inputs_t.get_shape().as_list()
   initializer = init_ops.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = contrib_rnn.LSTMCell(
+  cell = rnn_cell_impl.LSTMCell(
       num_units=input_size,
       use_peepholes=True,
       initializer=initializer,

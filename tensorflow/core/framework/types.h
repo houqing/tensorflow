@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_FRAMEWORK_TYPES_H_
-#define TENSORFLOW_FRAMEWORK_TYPES_H_
+#ifndef TENSORFLOW_CORE_FRAMEWORK_TYPES_H_
+#define TENSORFLOW_CORE_FRAMEWORK_TYPES_H_
 
 #include <map>
 #include <set>
@@ -30,7 +30,6 @@ limitations under the License.
 #include "tensorflow/core/framework/numeric_types.h"
 #include "tensorflow/core/framework/resource_handle.h"
 #include "tensorflow/core/framework/types.pb.h"
-#include "tensorflow/core/framework/variant.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
 #include "tensorflow/core/lib/gtl/inlined_vector.h"
@@ -38,6 +37,8 @@ limitations under the License.
 #include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
+
+class Variant;
 
 // MemoryType is used to describe whether input or output Tensors of
 // an OpKernel should reside in "Host memory" (e.g., CPU memory) or
@@ -58,21 +59,23 @@ class DeviceType {
   explicit DeviceType(StringPiece type) : type_(type.data(), type.size()) {}
 
   const char* type() const { return type_.c_str(); }
-  const string& type_string() const { return type_; }
+  const std::string& type_string() const { return type_; }
 
   bool operator<(const DeviceType& other) const;
   bool operator==(const DeviceType& other) const;
   bool operator!=(const DeviceType& other) const { return !(*this == other); }
 
  private:
-  string type_;
+  std::string type_;
 };
 std::ostream& operator<<(std::ostream& os, const DeviceType& d);
 
 // Convenient constants that can be passed to a DeviceType constructor
-TF_EXPORT extern const char* const DEVICE_CPU;   // "CPU"
-TF_EXPORT extern const char* const DEVICE_GPU;   // "GPU"
-TF_EXPORT extern const char* const DEVICE_SYCL;  // "SYCL"
+TF_EXPORT extern const char* const DEVICE_DEFAULT;     // "DEFAULT"
+TF_EXPORT extern const char* const DEVICE_CPU;         // "CPU"
+TF_EXPORT extern const char* const DEVICE_GPU;         // "GPU"
+TF_EXPORT extern const char* const DEVICE_SYCL;        // "SYCL"
+TF_EXPORT extern const char* const DEVICE_TPU_SYSTEM;  // "TPU_SYSTEM"
 
 template <typename Device>
 struct DeviceName {};
@@ -82,12 +85,13 @@ struct DeviceName<Eigen::ThreadPoolDevice> {
   static const std::string value;
 };
 
-#if GOOGLE_CUDA
+#if (defined(GOOGLE_CUDA) && GOOGLE_CUDA) || \
+    (defined(TENSORFLOW_USE_ROCM) && TENSORFLOW_USE_ROCM)
 template <>
 struct DeviceName<Eigen::GpuDevice> {
   static const std::string value;
 };
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #ifdef TENSORFLOW_USE_SYCL
 template <>
@@ -103,12 +107,14 @@ typedef gtl::InlinedVector<DataType, 4> DataTypeVector;
 typedef gtl::ArraySlice<DataType> DataTypeSlice;
 
 typedef gtl::InlinedVector<DeviceType, 4> DeviceTypeVector;
+typedef gtl::InlinedVector<std::pair<DeviceType, int32>, 4>
+    PrioritizedDeviceTypeVector;
 
 // Convert the enums to strings for errors:
-string DataTypeString(DataType dtype);
-string DeviceTypeString(const DeviceType& device_type);
-string DataTypeSliceString(const DataTypeSlice dtypes);
-inline string DataTypeVectorString(const DataTypeVector& dtypes) {
+std::string DataTypeString(DataType dtype);
+std::string DeviceTypeString(const DeviceType& device_type);
+std::string DataTypeSliceString(const DataTypeSlice dtypes);
+inline std::string DataTypeVectorString(const DataTypeVector& dtypes) {
   return DataTypeSliceString(dtypes);
 }
 
@@ -294,7 +300,7 @@ inline const DataTypeSet& QuantizedTypes() { return kQuantizedTypes; }
 // Types that support '<' and '>', including quantized types.
 const DataTypeSet kRealAndQuantizedTypes =
     ToSet(DT_FLOAT) | ToSet(DT_DOUBLE) | ToSet(DT_INT32) | ToSet(DT_INT64) |
-    ToSet(DT_UINT8) | ToSet(DT_UINT16) | ToSet(DT_UINT16) | ToSet(DT_INT8) |
+    ToSet(DT_UINT8) | ToSet(DT_UINT16) | ToSet(DT_INT16) | ToSet(DT_INT8) |
     ToSet(DT_QINT8) | ToSet(DT_QUINT8) | ToSet(DT_QINT16) | ToSet(DT_QUINT16) |
     ToSet(DT_QINT32) | ToSet(DT_HALF) | ToSet(DT_BFLOAT16);
 inline const DataTypeSet& RealAndQuantizedTypes() {
@@ -386,11 +392,9 @@ MATCH_TYPE_AND_ENUM(uint16, DT_UINT16);
 MATCH_TYPE_AND_ENUM(uint8, DT_UINT8);
 MATCH_TYPE_AND_ENUM(int16, DT_INT16);
 MATCH_TYPE_AND_ENUM(int8, DT_INT8);
-MATCH_TYPE_AND_ENUM(string, DT_STRING);
+MATCH_TYPE_AND_ENUM(tstring, DT_STRING);
 MATCH_TYPE_AND_ENUM(complex64, DT_COMPLEX64);
 MATCH_TYPE_AND_ENUM(complex128, DT_COMPLEX128);
-MATCH_TYPE_AND_ENUM(int64, DT_INT64);
-MATCH_TYPE_AND_ENUM(uint64, DT_UINT64);
 MATCH_TYPE_AND_ENUM(bool, DT_BOOL);
 MATCH_TYPE_AND_ENUM(qint8, DT_QINT8);
 MATCH_TYPE_AND_ENUM(quint8, DT_QUINT8);
@@ -401,6 +405,59 @@ MATCH_TYPE_AND_ENUM(bfloat16, DT_BFLOAT16);
 MATCH_TYPE_AND_ENUM(Eigen::half, DT_HALF);
 MATCH_TYPE_AND_ENUM(ResourceHandle, DT_RESOURCE);
 MATCH_TYPE_AND_ENUM(Variant, DT_VARIANT);
+
+template <>
+struct DataTypeToEnum<long> {
+  static DataType v() { return value; }
+  static DataType ref() { return MakeRefType(value); }
+  static constexpr DataType value = sizeof(long) == 4 ? DT_INT32 : DT_INT64;
+};
+template <>
+struct IsValidDataType<long> {
+  static constexpr bool value = true;
+};
+template <>
+struct EnumToDataType<DT_INT64> {
+  typedef tensorflow::int64 Type;
+};
+
+template <>
+struct DataTypeToEnum<unsigned long> {
+  static DataType v() { return value; }
+  static DataType ref() { return MakeRefType(value); }
+  static constexpr DataType value =
+      sizeof(unsigned long) == 4 ? DT_UINT32 : DT_UINT64;
+};
+template <>
+struct IsValidDataType<unsigned long> {
+  static constexpr bool value = true;
+};
+template <>
+struct EnumToDataType<DT_UINT64> {
+  typedef tensorflow::uint64 Type;
+};
+
+template <>
+struct DataTypeToEnum<long long> {
+  static DataType v() { return DT_INT64; }
+  static DataType ref() { return MakeRefType(DT_INT64); }
+  static constexpr DataType value = DT_INT64;
+};
+template <>
+struct IsValidDataType<long long> {
+  static constexpr bool value = true;
+};
+
+template <>
+struct DataTypeToEnum<unsigned long long> {
+  static DataType v() { return DT_UINT64; }
+  static DataType ref() { return MakeRefType(DT_UINT64); }
+  static constexpr DataType value = DT_UINT64;
+};
+template <>
+struct IsValidDataType<unsigned long long> {
+  static constexpr bool value = true;
+};
 
 #undef MATCH_TYPE_AND_ENUM
 
@@ -474,6 +531,12 @@ int DataTypeSize(DataType dt);
 // DEVICE_MEMORY otherwise.
 MemoryType MTypeFromDType(const DataType dtype);
 
+// Returns HOST_MEMORY if `dtype` is always on host, DEVICE_MEMORY otherwise.
+// The reason we have MTypeFromDType() and MTypeFromDTypeIntsOnDevice(): for
+// GPUs, we would like to keep int operations on host for performance concerns.
+// But for TPUs (and other devices), int operations are placed on device.
+MemoryType MTypeFromDTypeIntsOnDevice(const DataType dtype);
+
 // Types that always sit on host: DT_STRING, DT_STRING_REF, DT_RESOURCE.
 // For DT_RESOURCE, the handle always sits on host (even if the underlying
 // object has device-allocated resources).
@@ -481,4 +544,4 @@ bool DataTypeAlwaysOnHost(DataType dt);
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_FRAMEWORK_TYPES_H_
+#endif  // TENSORFLOW_CORE_FRAMEWORK_TYPES_H_

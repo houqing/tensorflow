@@ -28,6 +28,14 @@ namespace xla {
 /* static */ tensorflow::mutex Compiler::platform_compiler_mutex_(
     tensorflow::LINKER_INITIALIZED);
 
+StatusOr<
+    std::tuple<std::unique_ptr<HloModule>, std::unique_ptr<BufferAssignment>>>
+Compiler::RunHloPassesAndBufferAssignement(
+    std::unique_ptr<HloModule> module, se::StreamExecutor* executor,
+    se::DeviceMemoryAllocator* device_allocator) {
+  return Unimplemented("This compiler does not support this method");
+}
+
 std::vector<std::unique_ptr<tensorflow::protobuf::Message>>
 Compiler::ComputeBackendConfigs(const HloInstruction& hlo,
                                 se::StreamExecutor* executor) const {
@@ -45,7 +53,7 @@ Compiler::ComputeDefaultBackendConfig(const HloInstruction& hlo,
 // Define a default version where metadata is not used.
 StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
 Compiler::CompileAheadOfTime(
-    std::vector<std::unique_ptr<HloModule>> modules,
+    std::unique_ptr<HloModuleGroup> module_group,
     const AotCompilationOptions& options,
     std::unique_ptr<AotCompilationMetadata>* metadata) {
   if (metadata != nullptr) {
@@ -53,7 +61,7 @@ Compiler::CompileAheadOfTime(
         "Populating AotCompilationMetadata is not implemented on this "
         "compiler.");
   }
-  return CompileAheadOfTime(std::move(modules), options);
+  return CompileAheadOfTime(std::move(module_group), options);
 }
 
 /* static */ std::map<se::Platform::Id, Compiler::CompilerFactory>*
@@ -98,10 +106,17 @@ Compiler::GetPlatformCompilers() {
   auto* factories = GetPlatformCompilerFactories();
   auto it = factories->find(platform->id());
   if (it == factories->end()) {
+    string hint;
+    if (platform->Name() == "Host") {
+      hint = " (hint: try linking in tensorflow/compiler/jit:xla_cpu_jit)";
+    } else if (platform->Name() == "CUDA") {
+      hint = " (hint: try linking in tensorflow/compiler/jit:xla_gpu_jit)";
+    }
+
     return NotFound(
         "could not find registered compiler for platform %s -- check "
-        "target linkage",
-        platform->Name().c_str());
+        "target linkage%s",
+        platform->Name(), hint);
   }
 
   // And then we invoke the factory, placing the result into the mapping.
@@ -110,6 +125,6 @@ Compiler::GetPlatformCompilers() {
 }
 
 AotCompilationOptions::AotCompilationOptions()
-    : debug_options_(legacy_flags::GetDebugOptionsFromFlags()) {}
+    : debug_options_(GetDebugOptionsFromFlags()) {}
 
 }  // namespace xla

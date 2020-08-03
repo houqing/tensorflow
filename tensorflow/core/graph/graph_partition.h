@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_GRAPH_GRAPH_PARTITION_H_
-#define TENSORFLOW_GRAPH_GRAPH_PARTITION_H_
+#ifndef TENSORFLOW_CORE_GRAPH_GRAPH_PARTITION_H_
+#define TENSORFLOW_CORE_GRAPH_GRAPH_PARTITION_H_
 
 #include <functional>
 #include <string>
@@ -42,7 +42,7 @@ struct PartitionOptions {
   // A function that returns the incarnation of a device given the
   // device's fullname. If not found, GetIncarnationFunc should return
   // kIllegalIncarnation.
-  static const uint64 kIllegalIncarnation = 0;
+  static constexpr uint64 kIllegalIncarnation = 0;
   typedef std::function<uint64(const string&)> GetIncarnationFunc;
   GetIncarnationFunc get_incarnation = nullptr;
 
@@ -95,4 +95,4 @@ Status AddControlEdges(const PartitionOptions& opts,
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_GRAPH_GRAPH_PARTITION_H_
+#endif  // TENSORFLOW_CORE_GRAPH_GRAPH_PARTITION_H_

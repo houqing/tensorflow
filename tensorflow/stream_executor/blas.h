@@ -41,9 +41,11 @@ limitations under the License.
 #define TENSORFLOW_STREAM_EXECUTOR_BLAS_H_
 
 #include <complex>
+#include <vector>
 
 #include "tensorflow/stream_executor/host_or_device_scalar.h"
 #include "tensorflow/stream_executor/lib/array_slice.h"
+#include "tensorflow/stream_executor/lib/statusor.h"
 #include "tensorflow/stream_executor/platform/port.h"
 
 namespace Eigen {
@@ -65,32 +67,32 @@ namespace blas {
 enum class Transpose { kNoTranspose, kTranspose, kConjugateTranspose };
 
 // Returns a name for t.
-string TransposeString(Transpose t);
+std::string TransposeString(Transpose t);
 
 // Specifies whether the upper or lower triangular part of a
 // symmetric/Hermitian matrix is used.
 enum class UpperLower { kUpper, kLower };
 
 // Returns a name for ul.
-string UpperLowerString(UpperLower ul);
+std::string UpperLowerString(UpperLower ul);
 
 // Specifies whether a matrix is unit triangular.
 enum class Diagonal { kUnit, kNonUnit };
 
 // Returns a name for d.
-string DiagonalString(Diagonal d);
+std::string DiagonalString(Diagonal d);
 
 // Specifies whether a Hermitian matrix appears on the left or right in
 // operation.
 enum class Side { kLeft, kRight };
 
 // Returns a name for s.
-string SideString(Side s);
+std::string SideString(Side s);
 
 // Type with which intermediate computations of a blas routine are performed.
 //
 // Some blas calls can perform computations with a type that's different than
-// the type of their inputs/outputs.  This lets you e.g. multiply two matricies
+// the type of their inputs/outputs.  This lets you e.g. multiply two matrices
 // of int8s using float32s to store the matmul's intermediate values.
 enum class ComputationType {
   kF16,         // 16-bit floating-point
@@ -102,7 +104,7 @@ enum class ComputationType {
 };
 
 // Converts a ComputationType to a string.
-string ComputationTypeString(ComputationType ty);
+std::string ComputationTypeString(ComputationType ty);
 
 std::ostream &operator<<(std::ostream &os, ComputationType ty);
 
@@ -155,7 +157,7 @@ class AlgorithmConfig {
   bool operator!=(const AlgorithmConfig &other) const {
     return !(*this == other);
   }
-  string ToString() const;
+  std::string ToString() const;
 
  private:
   AlgorithmType algorithm_;
@@ -1121,6 +1123,40 @@ class BlasSupport {
       const port::ArraySlice<DeviceMemory<std::complex<double>> *> &c, int ldc,
       int batch_count, ScratchAllocator *scratch_allocator) = 0;
 
+  // Batched gemm with strides instead of pointer arrays.
+  virtual bool DoBlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, float alpha, const DeviceMemory<Eigen::half> &a,
+      int lda, int64 stride_a, const DeviceMemory<Eigen::half> &b, int ldb,
+      int64 stride_b, float beta, DeviceMemory<Eigen::half> *c, int ldc,
+      int64 stride_c, int batch_count) = 0;
+  virtual bool DoBlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, float alpha, const DeviceMemory<float> &a, int lda,
+      int64 stride_a, const DeviceMemory<float> &b, int ldb, int64 stride_b,
+      float beta, DeviceMemory<float> *c, int ldc, int64 stride_c,
+      int batch_count) = 0;
+  virtual bool DoBlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, double alpha, const DeviceMemory<double> &a, int lda,
+      int64 stride_a, const DeviceMemory<double> &b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<double> *c, int ldc, int64 stride_c,
+      int batch_count) = 0;
+  virtual bool DoBlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, std::complex<float> alpha,
+      const DeviceMemory<std::complex<float>> &a, int lda, int64 stride_a,
+      const DeviceMemory<std::complex<float>> &b, int ldb, int64 stride_b,
+      std::complex<float> beta, DeviceMemory<std::complex<float>> *c, int ldc,
+      int64 stride_c, int batch_count) = 0;
+  virtual bool DoBlasGemmStridedBatched(
+      Stream *stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, std::complex<double> alpha,
+      const DeviceMemory<std::complex<double>> &a, int lda, int64 stride_a,
+      const DeviceMemory<std::complex<double>> &b, int ldb, int64 stride_b,
+      std::complex<double> beta, DeviceMemory<std::complex<double>> *c, int ldc,
+      int64 stride_c, int batch_count) = 0;
+
   // Computes a matrix-matrix product where one input matrix is Hermitian:
   //
   //     c <- alpha * a * b + beta * c,
@@ -1346,6 +1382,8 @@ class BlasSupport {
                           std::complex<double> alpha,
                           const DeviceMemory<std::complex<double>> &a, int lda,
                           DeviceMemory<std::complex<double>> *b, int ldb) = 0;
+
+  virtual port::Status GetVersion(std::string *version) = 0;
 
  protected:
   BlasSupport() {}
@@ -1990,6 +2028,38 @@ class BlasSupport {
       int ldb, std::complex<double> beta,                                      \
       const port::ArraySlice<DeviceMemory<std::complex<double>> *> &c,         \
       int ldc, int batch_count, ScratchAllocator *scratch_allocator) override; \
+  bool DoBlasGemmStridedBatched(                                               \
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, float alpha,                               \
+      const DeviceMemory<Eigen::half> &a, int lda, int64 stride_a,             \
+      const DeviceMemory<Eigen::half> &b, int ldb, int64 stride_b, float beta, \
+      DeviceMemory<Eigen::half> *c, int ldc, int64 stride_c, int batch_count); \
+  bool DoBlasGemmStridedBatched(                                               \
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, float alpha, const DeviceMemory<float> &a, \
+      int lda, int64 stride_a, const DeviceMemory<float> &b, int ldb,          \
+      int64 stride_b, float beta, DeviceMemory<float> *c, int ldc,             \
+      int64 stride_c, int batch_count);                                        \
+  bool DoBlasGemmStridedBatched(                                               \
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, double alpha,                              \
+      const DeviceMemory<double> &a, int lda, int64 stride_a,                  \
+      const DeviceMemory<double> &b, int ldb, int64 stride_b, double beta,     \
+      DeviceMemory<double> *c, int ldc, int64 stride_c, int batch_count);      \
+  bool DoBlasGemmStridedBatched(                                               \
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, std::complex<float> alpha,                 \
+      const DeviceMemory<std::complex<float>> &a, int lda, int64 stride_a,     \
+      const DeviceMemory<std::complex<float>> &b, int ldb, int64 stride_b,     \
+      std::complex<float> beta, DeviceMemory<std::complex<float>> *c, int ldc, \
+      int64 stride_c, int batch_count);                                        \
+  bool DoBlasGemmStridedBatched(                                               \
+      Stream *stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, std::complex<double> alpha,                \
+      const DeviceMemory<std::complex<double>> &a, int lda, int64 stride_a,    \
+      const DeviceMemory<std::complex<double>> &b, int ldb, int64 stride_b,    \
+      std::complex<double> beta, DeviceMemory<std::complex<double>> *c,        \
+      int ldc, int64 stride_c, int batch_count);                               \
   bool DoBlasHemm(Stream *stream, blas::Side side, blas::UpperLower uplo,      \
                   uint64 m, uint64 n, std::complex<float> alpha,               \
                   const DeviceMemory<std::complex<float>> &a, int lda,         \
@@ -2125,7 +2195,8 @@ class BlasSupport {
                   blas::Transpose transa, blas::Diagonal diag, uint64 m,       \
                   uint64 n, std::complex<double> alpha,                        \
                   const DeviceMemory<std::complex<double>> &a, int lda,        \
-                  DeviceMemory<std::complex<double>> *b, int ldb) override;
+                  DeviceMemory<std::complex<double>> *b, int ldb) override;    \
+  port::Status GetVersion(std::string *version) override;
 
 }  // namespace blas
 }  // namespace stream_executor

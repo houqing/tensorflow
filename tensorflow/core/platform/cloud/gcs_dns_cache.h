@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_PLATNFORM_CLOUD_DNS_CACHE_H_
-#define TENSORFLOW_PLATNFORM_CLOUD_DNS_CACHE_H_
+#ifndef TENSORFLOW_CORE_PLATFORM_CLOUD_GCS_DNS_CACHE_H_
+#define TENSORFLOW_CORE_PLATFORM_CLOUD_GCS_DNS_CACHE_H_
 
 #include <random>
 
@@ -62,16 +62,16 @@ class GcsDnsCache {
   mutex mu_;
   Env* env_;
   condition_variable cond_var_;
-  std::default_random_engine random_ GUARDED_BY(mu_);
-  bool started_ GUARDED_BY(mu_) = false;
-  bool cancelled_ GUARDED_BY(mu_) = false;
-  std::unique_ptr<Thread> worker_ GUARDED_BY(mu_);  // After mutable vars.
+  std::default_random_engine random_ TF_GUARDED_BY(mu_);
+  bool started_ TF_GUARDED_BY(mu_) = false;
+  bool cancelled_ TF_GUARDED_BY(mu_) = false;
+  std::unique_ptr<Thread> worker_ TF_GUARDED_BY(mu_);  // After mutable vars.
   const int64 refresh_rate_secs_;
 
   // Entries in this vector correspond to entries in kCachedDomainNames.
-  std::vector<std::vector<string>> addresses_ GUARDED_BY(mu_);
+  std::vector<std::vector<string>> addresses_ TF_GUARDED_BY(mu_);
 };
 
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_PLATNFORM_CLOUD_DNS_CACHE_H_
+#endif  // TENSORFLOW_CORE_PLATFORM_CLOUD_GCS_DNS_CACHE_H_

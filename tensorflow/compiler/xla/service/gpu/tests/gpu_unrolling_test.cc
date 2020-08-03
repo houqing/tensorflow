@@ -48,7 +48,8 @@ TEST_F(GpuUnrollingTest, DoNotUnroll) {
   auto debug_options = HloTestBase::GetDebugOptionsForTest();
   debug_options.set_xla_gpu_max_kernel_unroll_factor(1);
   config.set_debug_options(debug_options);
-  auto hlo_module = ParseHloString(kAddModule, config).ValueOrDie();
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kAddModule, config).ValueOrDie();
 
   CompileAndVerifyIr(std::move(hlo_module),
                      R"(
@@ -67,7 +68,8 @@ TEST_F(GpuUnrollingTest, UnrollFourTimes) {
   // the maximum unroll factor.
   debug_options.set_xla_gpu_max_kernel_unroll_factor(8);
   config.set_debug_options(debug_options);
-  auto hlo_module = ParseHloString(kAddModule, config).ValueOrDie();
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kAddModule, config).ValueOrDie();
 
   CompileAndVerifyIr(std::move(hlo_module),
                      R"(
@@ -85,8 +87,9 @@ TEST_F(GpuUnrollingTest, UnrollFourTimes) {
 TEST_F(GpuUnrollingTest, UnrollDefaultTimes) {
   // The default unrolling factor is 4.
   HloModuleConfig config;
-  config.set_debug_options(legacy_flags::GetDebugOptionsFromFlags());
-  auto hlo_module = ParseHloString(kAddModule, config).ValueOrDie();
+  config.set_debug_options(GetDebugOptionsFromFlags());
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kAddModule, config).ValueOrDie();
 
   CompileAndVerifyIr(std::move(hlo_module),
                      R"(
@@ -117,7 +120,8 @@ TEST_F(GpuUnrollingTest, UnrollUnfusedAdd) {
       p1 = f32[2,2]{1,0} parameter(1)
       ROOT add = f32[2,2]{1,0} add(p0, p1)
     })";
-  auto hlo_module = ParseHloString(kUnfusedAddModule, config).ValueOrDie();
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kUnfusedAddModule, config).ValueOrDie();
 
   CompileAndVerifyIr(std::move(hlo_module),
                      R"(
@@ -134,10 +138,131 @@ TEST_F(GpuUnrollingTest, UnrollUnfusedAdd) {
                      /*match_optimized_ir=*/true);
 }
 
+TEST_F(GpuUnrollingTest, DisabledUnrollUnfusedSine) {
+  HloModuleConfig config;
+  auto debug_options = HloTestBase::GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_max_kernel_unroll_factor(4);
+  config.set_debug_options(debug_options);
+
+  const char *const kUnfusedAddModule = R"(
+    HloModule test_module
+
+    ENTRY SineFunc {
+      p0 = f32[160000]{0} parameter(0)
+      ROOT s = f32[160000]{0} sine(p0)
+    })";
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kUnfusedAddModule, config).ValueOrDie();
+
+  // Note: On ROCm side, we do bare minimal to make the test pass.
+  // "sine" function is in different code generation path from nvptx: on
+  // ROCm platform, it get pulled in from ROCm-Device-Libs, whereas in
+  // Cuda, generated llvm IR is compiled PTX.
+  auto expected_ir = is_built_with_rocm_ ? R"(
+; CHECK: __ocml_sin_f32
+; CHECK-NOT: load float
+)"
+                                         : R"(
+; CHECK: load float
+; CHECK-NOT: load float
+}
+)";
+
+  CompileAndVerifyIr(std::move(hlo_module), expected_ir,
+                     /*match_optimized_ir=*/true);
+}
+
+TEST_F(GpuUnrollingTest, DisabledUnrollUnfusedCosine) {
+  HloModuleConfig config;
+  auto debug_options = HloTestBase::GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_max_kernel_unroll_factor(4);
+  config.set_debug_options(debug_options);
+
+  const char *const kUnfusedAddModule = R"(
+    HloModule test_module
+
+    ENTRY SineFunc {
+      p0 = f32[160000]{0} parameter(0)
+      ROOT s = f32[160000]{0} cosine(p0)
+    })";
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kUnfusedAddModule, config).ValueOrDie();
+
+  // Note: On ROCm side, we do bare minimal to make the test pass.
+  // "cosine" function is in different code generation path from nvptx: on
+  // ROCm platform, it get pulled in from ROCm-Device-Libs, whereas in
+  // Cuda, generated llvm IR is compiled PTX.
+  auto expected_ir = is_built_with_rocm_ ? R"(
+; CHECK: __ocml_cos_f32
+; CHECK-NOT: load float
+)"
+                                         : R"(
+; CHECK: load float
+; CHECK-NOT: load float
+}
+)";
+
+  CompileAndVerifyIr(std::move(hlo_module), expected_ir,
+                     /*match_optimized_ir=*/true);
+}
+
+TEST_F(GpuUnrollingTest, DisabledUnrollUnfusedPower) {
+  HloModuleConfig config;
+  auto debug_options = HloTestBase::GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_max_kernel_unroll_factor(4);
+  config.set_debug_options(debug_options);
+
+  const char *const kUnfusedAddModule = R"(
+    HloModule test_module
+
+    ENTRY SineFunc {
+      p0 = f32[160000]{0} parameter(0)
+      ROOT s = f32[160000]{0} power(p0, p0)
+    })";
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kUnfusedAddModule, config).ValueOrDie();
+
+  CompileAndVerifyIr(std::move(hlo_module),
+                     R"(
+; CHECK: load float
+; CHECK-NOT: load float
+}
+      )",
+                     /*match_optimized_ir=*/true);
+}
+
+TEST_F(GpuUnrollingTest, DisabledUnrollUnfusedAtan2) {
+  HloModuleConfig config;
+  auto debug_options = HloTestBase::GetDebugOptionsForTest();
+  debug_options.set_xla_gpu_max_kernel_unroll_factor(4);
+  config.set_debug_options(debug_options);
+
+  const char *const kUnfusedAddModule = R"(
+    HloModule test_module
+
+    ENTRY SineFunc {
+      p0 = f32[160000]{0} parameter(0)
+      ROOT s = f32[160000]{0} atan2(p0, p0)
+    })";
+  auto hlo_module =
+      ParseAndReturnVerifiedModule(kUnfusedAddModule, config).ValueOrDie();
+
+  CompileAndVerifyIr(std::move(hlo_module),
+                     R"(
+; CHECK: load float
+; CHECK-NOT: load float
+}
+      )",
+                     /*match_optimized_ir=*/true);
+}
+
 TEST_F(GpuUnrollingTest, UnrollMultiOutputFusion) {
   HloModuleConfig config;
   auto debug_options = HloTestBase::GetDebugOptionsForTest();
   debug_options.set_xla_gpu_max_kernel_unroll_factor(2);
+  // Disable layout assignment for this test.  Layout assignment does not expect
+  // fusions to be present, and so it does the wrong thing.
+  debug_options.add_xla_disable_hlo_passes("layout-assignment");
   config.set_debug_options(debug_options);
 
   const char *const kMultiOutputFusionModule = R"(
@@ -158,7 +283,8 @@ TEST_F(GpuUnrollingTest, UnrollMultiOutputFusion) {
                                                    calls=fused_computation
     })";
   auto hlo_module =
-      ParseHloString(kMultiOutputFusionModule, config).ValueOrDie();
+      ParseAndReturnVerifiedModule(kMultiOutputFusionModule, config)
+          .ValueOrDie();
 
   CompileAndVerifyIr(std::move(hlo_module),
                      R"(

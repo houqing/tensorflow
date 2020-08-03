@@ -16,22 +16,15 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_COMMON_RUNTIME_LOWER_IF_OP_H_
 #define TENSORFLOW_CORE_COMMON_RUNTIME_LOWER_IF_OP_H_
 
-#include "tensorflow/core/common_runtime/optimization_registry.h"
 #include "tensorflow/core/lib/core/status.h"
 
 namespace tensorflow {
 
-// Rewrite If ops to use switch and merge nodes instead.
-class LowerIfOpPass : public GraphOptimizationPass {
- public:
-  static const char* const kLowerUsingSwitchMergeAttr;
+class Graph;
+class Node;
 
-  Status Run(const GraphOptimizationPassOptions& options) override;
-
- private:
-  // Rewrite the given If node `n` in graph `g` to use the switch-merge form.
-  Status RewriteNode(Node* n, Graph* g);
-};
+// Replaces If node `n` with its lowered form that uses Switch and Merge nodes.
+Status RewriteIfNode(Node* n, Graph* g, bool keep_node_fetchable);
 
 }  // namespace tensorflow
 

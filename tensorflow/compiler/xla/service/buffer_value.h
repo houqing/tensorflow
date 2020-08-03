@@ -19,13 +19,12 @@ limitations under the License.
 #include <functional>
 #include <string>
 
+#include "absl/types/span.h"
 #include "tensorflow/compiler/xla/service/hlo.pb.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/types.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
-#include "tensorflow/core/lib/gtl/array_slice.h"
-#include "tensorflow/core/lib/gtl/int_type.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/macros.h"
 #include "tensorflow/core/platform/types.h"
@@ -86,7 +85,7 @@ namespace xla {
 
 class BufferValue {
  public:
-  TF_LIB_GTL_DEFINE_INT_TYPE(Color, int64);
+  using Color = int64;
 
   // Id is a unique identifier for the BufferValue to facilitate efficient
   // collections of BufferValues with stable iteration order.
@@ -109,18 +108,21 @@ class BufferValue {
 
   // Return the color of the BufferValue. Differently colored buffers can not be
   // parts of the same allocation.
+  ABSL_DEPRECATED("Use Layout::memory_space instead.")
   Color color() const {
     CHECK_NE(color_, kInvalidColor)
         << "Should not query the color of a buffer that was never colored";
     return color_;
   }
 
+  ABSL_DEPRECATED("Use Layout::memory_space instead.")
   void set_color(Color color) {
     CHECK_NE(color, kInvalidColor)
         << "Should not set the color of a buffer to the invalid color";
     color_ = color;
   }
 
+  ABSL_DEPRECATED("Use Layout::memory_space instead.")
   bool has_color() const { return color_ != kInvalidColor; }
 
   // Return the shape of the buffer. This reference points into the shape field
@@ -141,6 +143,9 @@ class BufferValue {
   // operator< is required for std::set.
   bool operator<(const BufferValue& other) const { return id_ < other.id_; }
 
+  bool operator==(const BufferValue& other) const { return id_ == other.id_; }
+  bool operator!=(const BufferValue& other) const { return id_ != other.id_; }
+
   virtual string ToString() const = 0;
 
   // TODO(lauj) rename LogicalBufferProto to BufferValueProto.
@@ -151,13 +156,13 @@ class BufferValue {
   static LogicalBufferProto::Location ToLocationProto(
       const HloInstruction& instruction, const ShapeIndex& index);
 
-  const Color kInvalidColor = Color(-1);
+  const Color kInvalidColor = -1;
 
  protected:
   BufferValue(HloInstruction* instruction, const ShapeIndex& index, Id id);
 
  private:
-  // The definining instruction and index are not stored here; they can be found
+  // The defining instruction and index are not stored here; they can be found
   // in the LogicalBuffer and HloValue subclasses. This class exists only to
   // support migrations from TuplePointsToAnalysis to HloDataflowAnalysis, by
   // allowing abstract use of LogicalBuffer or HloValue. After those migrations

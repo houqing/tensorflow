@@ -16,6 +16,7 @@ limitations under the License.
 // Test that validates tensorflow/core/api_def/base_api/api_def*.pbtxt files.
 
 #include <ctype.h>
+
 #include <algorithm>
 #include <string>
 #include <unordered_map>
@@ -33,17 +34,24 @@ limitations under the License.
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/init_main.h"
 #include "tensorflow/core/platform/protobuf.h"
+#include "tensorflow/core/platform/resource_loader.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/types.h"
-#include "tensorflow/core/util/command_line_flags.h"
 
 namespace tensorflow {
 namespace {
-constexpr char kDefaultApiDefDir[] =
-    "tensorflow/core/api_def/base_api";
-constexpr char kPythonApiDefDir[] =
-    "tensorflow/core/api_def/python_api";
+
 constexpr char kApiDefFilePattern[] = "api_def_*.pbtxt";
+
+string DefaultApiDefDir() {
+  return GetDataDependencyFilepath(
+      io::JoinPath("tensorflow", "core", "api_def", "base_api"));
+}
+
+string PythonApiDefDir() {
+  return GetDataDependencyFilepath(
+      io::JoinPath("tensorflow", "core", "api_def", "python_api"));
+}
 
 // Reads golden ApiDef files and returns a map from file name to ApiDef file
 // contents.
@@ -59,8 +67,8 @@ void GetGoldenApiDefs(Env* env, const string& api_files_dir,
     file_contents = PBTxtFromMultiline(file_contents);
 
     ApiDefs api_defs;
-    CHECK(tensorflow::protobuf::TextFormat::ParseFromString(file_contents,
-                                                            &api_defs))
+    QCHECK(tensorflow::protobuf::TextFormat::ParseFromString(file_contents,
+                                                             &api_defs))
         << "Failed to load " << file_path;
     CHECK_EQ(api_defs.op_size(), 1);
     (*name_to_api_def)[api_defs.op(0).graph_op_name()] = api_defs.op(0);
@@ -176,7 +184,22 @@ void TestDeprecatedAttributesSetCorrectly(
     }
   }
 }
-}  // namespace
+
+void TestDeprecationVersionSetCorrectly(
+    const std::unordered_map<string, ApiDef>& api_defs_map) {
+  for (const auto& name_and_api_def : api_defs_map) {
+    const auto& name = name_and_api_def.first;
+    const auto& api_def = name_and_api_def.second;
+    if (api_def.deprecation_version() != 0) {
+      ASSERT_TRUE(api_def.deprecation_version() > 0)
+          << "Found ApiDef with negative deprecation_version";
+      ASSERT_FALSE(api_def.deprecation_message().empty())
+          << "ApiDef that includes deprecation_version > 0 must also specify "
+          << "a deprecation_message. Op " << name
+          << " has deprecation_version > 0 but deprecation_message is not set.";
+    }
+  }
+}
 
 class BaseApiTest : public ::testing::Test {
  protected:
@@ -185,7 +208,7 @@ class BaseApiTest : public ::testing::Test {
     const std::vector<string> multi_line_fields = {"description"};
 
     Env* env = Env::Default();
-    GetGoldenApiDefs(env, kDefaultApiDefDir, &api_defs_map_);
+    GetGoldenApiDefs(env, DefaultApiDefDir(), &api_defs_map_);
   }
   OpList ops_;
   std::unordered_map<string, ApiDef> api_defs_map_;
@@ -268,6 +291,12 @@ TEST_F(BaseApiTest, DeprecationSetCorrectly) {
   TestDeprecatedAttributesSetCorrectly(api_defs_map_);
 }
 
+// Checks that deprecation_version is set for entire op only if
+// deprecation_message is set.
+TEST_F(BaseApiTest, DeprecationVersionSetCorrectly) {
+  TestDeprecationVersionSetCorrectly(api_defs_map_);
+}
+
 class PythonApiTest : public ::testing::Test {
  protected:
   PythonApiTest() {
@@ -275,7 +304,7 @@ class PythonApiTest : public ::testing::Test {
     const std::vector<string> multi_line_fields = {"description"};
 
     Env* env = Env::Default();
-    GetGoldenApiDefs(env, kPythonApiDefDir, &api_defs_map_);
+    GetGoldenApiDefs(env, PythonApiDefDir(), &api_defs_map_);
   }
   OpList ops_;
   std::unordered_map<string, ApiDef> api_defs_map_;
@@ -309,4 +338,11 @@ TEST_F(PythonApiTest, DeprecationSetCorrectly) {
   TestDeprecatedAttributesSetCorrectly(api_defs_map_);
 }
 
+// Checks that deprecation_version is set for entire op only if
+// deprecation_message is set.
+TEST_F(PythonApiTest, DeprecationVersionSetCorrectly) {
+  TestDeprecationVersionSetCorrectly(api_defs_map_);
+}
+
+}  // namespace
 }  // namespace tensorflow

@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "tensorflow/core/grappler/optimizers/data/map_and_batch_fusion.h"
 
+#include "absl/container/flat_hash_set.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/grappler/clusters/cluster.h"
@@ -30,22 +31,26 @@ namespace tensorflow {
 namespace grappler {
 namespace {
 
-constexpr char kFusedOpName[] = "MapAndBatchDatasetV2";
+constexpr char kFusedOpName[] = "MapAndBatchDataset";
+constexpr char kParallelMap[] = "ParallelMapDataset";
+constexpr char kParallelMapV2[] = "ParallelMapDatasetV2";
 
-NodeDef make_map_and_batch_node(const NodeDef& map_node,
-                                const NodeDef& batch_node,
-                                MutableGraphView* graph) {
+bool IsParallelMap(const NodeDef& node) {
+  return node.op() == kParallelMap || node.op() == kParallelMapV2;
+}
+
+NodeDef MakeMapAndBatchNode(const NodeDef& map_node, const NodeDef& batch_node,
+                            MutableGraphView* graph) {
   NodeDef new_node;
   new_node.set_op(kFusedOpName);
-  graph_utils::SetUniqueGraphNodeName(kFusedOpName, graph->GetGraph(),
-                                      &new_node);
+  graph_utils::SetUniqueGraphNodeName(kFusedOpName, graph->graph(), &new_node);
 
   // Set the `input` input argument.
   new_node.add_input(map_node.input(0));
 
   // Set the `other_arguments` input arguments.
   int num_other_args;
-  if (map_node.op() == "ParallelMapDataset") {
+  if (IsParallelMap(map_node)) {
     num_other_args = map_node.input_size() - 2;
   } else {
     num_other_args = map_node.input_size() - 1;
@@ -58,7 +63,7 @@ NodeDef make_map_and_batch_node(const NodeDef& map_node,
   new_node.add_input(batch_node.input(1));
 
   // Set the `num_parallel_calls` input argument.
-  if (map_node.op() == "ParallelMapDataset") {
+  if (map_node.op() == kParallelMap) {
     // The type of the `num_parallel_calls` argument in ParallelMapDataset
     // and MapAndBatchDataset is different (int32 and int64 respectively)
     // so we cannot reuse the same Const node and thus create a new one.
@@ -66,6 +71,8 @@ NodeDef make_map_and_batch_node(const NodeDef& map_node,
     NodeDef* tmp = graph_utils::AddScalarConstNode<int64>(
         v->attr().at("value").tensor().int_val(0), graph);
     new_node.add_input(tmp->name());
+  } else if (map_node.op() == kParallelMapV2) {
+    new_node.add_input(map_node.input(map_node.input_size() - 1));
   } else {
     NodeDef* tmp = graph_utils::AddScalarConstNode<int64>(1, graph);
     new_node.add_input(tmp->name());
@@ -79,24 +86,34 @@ NodeDef make_map_and_batch_node(const NodeDef& map_node,
     new_node.add_input(tmp->name());
   }
 
-  // Set `f` and `Targuments` attributes.
+  // Required attributes.
   for (auto key : {"f", "Targuments"}) {
-    (*new_node.mutable_attr())[key] = map_node.attr().at(key);
+    graph_utils::CopyAttribute(key, map_node, &new_node);
   }
-  // Set `output_types` and `output_shapes` attributes.
   for (auto key : {"output_shapes", "output_types"}) {
-    (*new_node.mutable_attr())[key] = batch_node.attr().at(key);
+    graph_utils::CopyAttribute(key, batch_node, &new_node);
   }
+
+  // Optional attributes.
+  // TODO(jsimsa): Support `use_inter_op_parallelism` and `sloppy`.
+  for (auto key : {"preserve_cardinality"}) {
+    if (gtl::FindOrNull(map_node.attr(), key)) {
+      graph_utils::CopyAttribute(key, map_node, &new_node);
+    }
+  }
+
   return new_node;
 }
 
 }  // namespace
 
-Status MapAndBatchFusion::Optimize(Cluster* cluster, const GrapplerItem& item,
-                                   GraphDef* output) {
+Status MapAndBatchFusion::OptimizeAndCollectStats(Cluster* cluster,
+                                                  const GrapplerItem& item,
+                                                  GraphDef* output,
+                                                  OptimizationStats* stats) {
   *output = item.graph;
   MutableGraphView graph(output);
-  std::set<string> nodes_to_delete;
+  absl::flat_hash_set<string> nodes_to_delete;
   for (const NodeDef& node : item.graph.node()) {
     if (node.op() != "BatchDataset" && node.op() != "BatchDatasetV2") {
       continue;
@@ -104,24 +121,26 @@ Status MapAndBatchFusion::Optimize(Cluster* cluster, const GrapplerItem& item,
 
     // Use a more descriptive variable name now that we know the node type.
     const NodeDef& batch_node = node;
-    GraphView::InputPort input_port = graph.GetInputPort(batch_node.name(), 0);
-    NodeDef* node2 = graph.GetRegularFanin(input_port).node;
-    if (node2->op() != "MapDataset" && node2->op() != "ParallelMapDataset") {
+    NodeDef* node2 = graph_utils::GetInputNode(batch_node, graph);
+
+    if (node2->op() != "MapDataset" && !IsParallelMap(*node2)) {
       continue;
     }
     // Use a more descriptive variable name now that we know the node type.
     NodeDef* map_node = node2;
 
     auto* new_node =
-        graph.AddNode(make_map_and_batch_node(*map_node, batch_node, &graph));
-    graph.ReplaceInput(batch_node, *new_node);
+        graph.AddNode(MakeMapAndBatchNode(*map_node, batch_node, &graph));
+    TF_RETURN_IF_ERROR(
+        graph.UpdateFanouts(batch_node.name(), new_node->name()));
 
     // Mark the `Map` and `Batch` nodes for removal.
     nodes_to_delete.insert(map_node->name());
     nodes_to_delete.insert(batch_node.name());
+    stats->num_changes++;
   }
 
-  graph.DeleteNodes(nodes_to_delete);
+  TF_RETURN_IF_ERROR(graph.DeleteNodes(nodes_to_delete));
   return Status::OK();
 }
 
@@ -133,5 +152,5 @@ void MapAndBatchFusion::Feedback(Cluster* cluster, const GrapplerItem& item,
 
 REGISTER_GRAPH_OPTIMIZER_AS(MapAndBatchFusion, "map_and_batch_fusion");
 
-}  // end namespace grappler
-}  // end namespace tensorflow
+}  // namespace grappler
+}  // namespace tensorflow

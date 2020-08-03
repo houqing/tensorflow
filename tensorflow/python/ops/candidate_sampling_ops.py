@@ -23,10 +23,16 @@ from tensorflow.python.framework import random_seed
 from tensorflow.python.ops import array_ops  # pylint: disable=unused-import
 from tensorflow.python.ops import gen_candidate_sampling_ops
 from tensorflow.python.ops import math_ops  # pylint: disable=unused-import
+from tensorflow.python.util import deprecation
+from tensorflow.python.util import dispatch
 from tensorflow.python.util.tf_export import tf_export
 
 
-@tf_export('nn.uniform_candidate_sampler')
+@tf_export(
+    'random.uniform_candidate_sampler',
+    v1=['random.uniform_candidate_sampler', 'nn.uniform_candidate_sampler'])
+@dispatch.add_dispatch_support
+@deprecation.deprecated_endpoints('nn.uniform_candidate_sampler')
 def uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
                               range_max, seed=None, name=None):
   """Samples a set of classes using a uniform base distribution.
@@ -82,7 +88,14 @@ def uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
       seed2=seed2, name=name)
 
 
-@tf_export('nn.log_uniform_candidate_sampler')
+@tf_export(
+    'random.log_uniform_candidate_sampler',
+    v1=[
+        'random.log_uniform_candidate_sampler',
+        'nn.log_uniform_candidate_sampler'
+    ])
+@dispatch.add_dispatch_support
+@deprecation.deprecated_endpoints('nn.log_uniform_candidate_sampler')
 def log_uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
                                   range_max, seed=None, name=None):
   """Samples a set of classes using a log-uniform (Zipfian) base distribution.
@@ -141,7 +154,11 @@ def log_uniform_candidate_sampler(true_classes, num_true, num_sampled, unique,
       seed2=seed2, name=name)
 
 
-@tf_export('nn.learned_unigram_candidate_sampler')
+@tf_export(
+    'random.learned_unigram_candidate_sampler',
+    'nn.learned_unigram_candidate_sampler')
+@dispatch.add_dispatch_support
+@deprecation.deprecated_endpoints(['nn.learned_unigram_candidate_sampler'])
 def learned_unigram_candidate_sampler(true_classes, num_true, num_sampled,
                                       unique, range_max, seed=None, name=None):
   """Samples a set of classes from a distribution learned during training.
@@ -198,7 +215,9 @@ def learned_unigram_candidate_sampler(true_classes, num_true, num_sampled,
       seed2=seed2, name=name)
 
 
-@tf_export('nn.fixed_unigram_candidate_sampler')
+@tf_export('random.fixed_unigram_candidate_sampler',
+           'nn.fixed_unigram_candidate_sampler')
+@dispatch.add_dispatch_support
 def fixed_unigram_candidate_sampler(true_classes,
                                     num_true,
                                     num_sampled,
@@ -290,7 +309,7 @@ def fixed_unigram_candidate_sampler(true_classes,
       unigrams=unigrams, seed=seed1, seed2=seed2, name=name)
 
 
-@tf_export('nn.all_candidate_sampler')
+@tf_export('random.all_candidate_sampler', 'nn.all_candidate_sampler')
 def all_candidate_sampler(true_classes, num_true, num_sampled, unique,
                           seed=None, name=None):
   """Generate the set of all classes.
@@ -327,6 +346,7 @@ def all_candidate_sampler(true_classes, num_true, num_sampled, unique,
 
 
 @tf_export('nn.compute_accidental_hits')
+@dispatch.add_dispatch_support
 def compute_accidental_hits(true_classes, sampled_candidates, num_true,
                             seed=None, name=None):
   """Compute the position ids in `sampled_candidates` matching `true_classes`.

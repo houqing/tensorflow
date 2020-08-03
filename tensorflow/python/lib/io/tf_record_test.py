@@ -20,6 +20,8 @@ from __future__ import print_function
 
 import gzip
 import os
+import random
+import string
 import zlib
 
 import six
@@ -29,11 +31,7 @@ from tensorflow.python.lib.io import tf_record
 from tensorflow.python.platform import test
 from tensorflow.python.util import compat
 
-prefix_path = "third_party/tensorflow/core/lib"
-
-# pylint: disable=invalid-name
 TFRecordCompressionType = tf_record.TFRecordCompressionType
-# pylint: enable=invalid-name
 
 # Edgar Allan Poe's 'Eldorado'
 _TEXT = b"""Gaily bedight,
@@ -67,6 +65,7 @@ _TEXT = b"""Gaily bedight,
 
 
 class TFCompressionTestCase(test.TestCase):
+  """TFCompression Test"""
 
   def setUp(self):
     super(TFCompressionTestCase, self).setUp()
@@ -130,9 +129,7 @@ class TFCompressionTestCase(test.TestCase):
 
 
 class TFRecordWriterTest(TFCompressionTestCase):
-
-  def setUp(self):
-    super(TFRecordWriterTest, self).setUp()
+  """TFRecordWriter Test"""
 
   def _AssertFilesEqual(self, a, b, equal):
     for an, bn in zip(a, b):
@@ -142,7 +139,39 @@ class TFRecordWriterTest(TFCompressionTestCase):
         else:
           self.assertNotEqual(af.read(), bf.read())
 
+  def _CompressionSizeDelta(self, records, options_a, options_b):
+    """Validate compression with options_a and options_b and return size delta.
+
+    Compress records with options_a and options_b. Uncompress both compressed
+    files and assert that the contents match the original records. Finally
+    calculate how much smaller the file compressed with options_a was than the
+    file compressed with options_b.
+
+    Args:
+      records: The records to compress
+      options_a: First set of options to compress with, the baseline for size.
+      options_b: Second set of options to compress with.
+
+    Returns:
+      The difference in file size when using options_a vs options_b. A positive
+      value means options_a was a better compression than options_b. A negative
+      value means options_b had better compression than options_a.
+
+    """
+
+    fn_a = self._WriteRecordsToFile(records, "tfrecord_a", options=options_a)
+    test_a = list(tf_record.tf_record_iterator(fn_a, options=options_a))
+    self.assertEqual(records, test_a, options_a)
+
+    fn_b = self._WriteRecordsToFile(records, "tfrecord_b", options=options_b)
+    test_b = list(tf_record.tf_record_iterator(fn_b, options=options_b))
+    self.assertEqual(records, test_b, options_b)
+
+    # Negative number => better compression.
+    return os.path.getsize(fn_a) - os.path.getsize(fn_b)
+
   def testWriteReadZLibFiles(self):
+    """test Write Read ZLib Files"""
     # Write uncompressed then compress manually.
     options = tf_record.TFRecordOptions(TFRecordCompressionType.NONE)
     files = self._CreateFiles(options, prefix="uncompressed")
@@ -165,6 +194,7 @@ class TFRecordWriterTest(TFCompressionTestCase):
     self._AssertFilesEqual(uncompressed_files, files, True)
 
   def testWriteReadGzipFiles(self):
+    """test Write Read Gzip Files"""
     # Write uncompressed then compress manually.
     options = tf_record.TFRecordOptions(TFRecordCompressionType.NONE)
     files = self._CreateFiles(options, prefix="uncompressed")
@@ -188,10 +218,84 @@ class TFRecordWriterTest(TFCompressionTestCase):
     ]
     self._AssertFilesEqual(uncompressed_files, files, True)
 
+  def testNoCompressionType(self):
+    """test No Compression Type"""
+    self.assertEqual(
+        "",
+        tf_record.TFRecordOptions.get_compression_type_string(
+            tf_record.TFRecordOptions()))
+
+    self.assertEqual(
+        "",
+        tf_record.TFRecordOptions.get_compression_type_string(
+            tf_record.TFRecordOptions("")))
+
+    with self.assertRaises(ValueError):
+      tf_record.TFRecordOptions(5)
+
+    with self.assertRaises(ValueError):
+      tf_record.TFRecordOptions("BZ2")
+
+  def testZlibCompressionType(self):
+    """test Zlib Compression Type"""
+    zlib_t = tf_record.TFRecordCompressionType.ZLIB
+
+    self.assertEqual(
+        "ZLIB",
+        tf_record.TFRecordOptions.get_compression_type_string(
+            tf_record.TFRecordOptions("ZLIB")))
+
+    self.assertEqual(
+        "ZLIB",
+        tf_record.TFRecordOptions.get_compression_type_string(
+            tf_record.TFRecordOptions(zlib_t)))
+
+    self.assertEqual(
+        "ZLIB",
+        tf_record.TFRecordOptions.get_compression_type_string(
+            tf_record.TFRecordOptions(tf_record.TFRecordOptions(zlib_t))))
+
+  def testCompressionOptions(self):
+    """Create record with mix of random and repeated data to test compression on."""
+    rnd = random.Random(123)
+    random_record = compat.as_bytes(
+        "".join(rnd.choice(string.digits) for _ in range(10000)))
+    repeated_record = compat.as_bytes(_TEXT)
+    for _ in range(10000):
+      start_i = rnd.randint(0, len(_TEXT))
+      length = rnd.randint(10, 200)
+      repeated_record += _TEXT[start_i:start_i + length]
+    records = [random_record, repeated_record, random_record]
+
+    tests = [
+        ("compression_level", 2, -1),  # Lower compression is worse.
+        ("compression_level", 6, 0),  # Default compression_level is equal.
+        ("flush_mode", zlib.Z_FULL_FLUSH, 1),  # A few less bytes.
+        ("flush_mode", zlib.Z_NO_FLUSH, 0),  # NO_FLUSH is the default.
+        ("input_buffer_size", 4096, 0),  # Increases time not size.
+        ("output_buffer_size", 4096, 0),  # Increases time not size.
+        ("window_bits", 8, -1),  # Smaller than default window increases size.
+        ("compression_strategy", zlib.Z_HUFFMAN_ONLY, -1),  # Worse.
+        ("compression_strategy", zlib.Z_FILTERED, -1),  # Worse.
+    ]
+
+    compression_type = tf_record.TFRecordCompressionType.ZLIB
+    options_a = tf_record.TFRecordOptions(compression_type)
+    for prop, value, delta_sign in tests:
+      options_b = tf_record.TFRecordOptions(
+          compression_type=compression_type, **{prop: value})
+      delta = self._CompressionSizeDelta(records, options_a, options_b)
+      self.assertTrue(
+          delta == 0 if delta_sign == 0 else delta // delta_sign > 0,
+          "Setting {} = {}, file was {} smaller didn't match sign of {}".format(
+              prop, value, delta, delta_sign))
+
 
 class TFRecordWriterZlibTest(TFCompressionTestCase):
+  """TFRecordWriter Zlib test"""
 
   def testZLibFlushRecord(self):
+    """test ZLib Flush Record"""
     original = [b"small record"]
     fn = self._WriteRecordsToFile(original, "small_record")
     with open(fn, "rb") as h:
@@ -254,12 +358,14 @@ class TFRecordWriterZlibTest(TFCompressionTestCase):
 
 
 class TFRecordIteratorTest(TFCompressionTestCase):
+  """TFRecordIterator test"""
 
   def setUp(self):
     super(TFRecordIteratorTest, self).setUp()
     self._num_records = 7
 
   def testIterator(self):
+    """test Iterator"""
     records = [self._Record(0, i) for i in range(self._num_records)]
     options = tf_record.TFRecordOptions(TFRecordCompressionType.ZLIB)
     fn = self._WriteRecordsToFile(records, "compressed_records", options)
@@ -267,7 +373,7 @@ class TFRecordIteratorTest(TFCompressionTestCase):
     reader = tf_record.tf_record_iterator(fn, options)
     for expected in records:
       record = next(reader)
-      self.assertAllEqual(expected, record)
+      self.assertEqual(expected, record)
     with self.assertRaises(StopIteration):
       record = next(reader)
 
@@ -303,20 +409,184 @@ class TFRecordIteratorTest(TFCompressionTestCase):
     actual = list(tf_record.tf_record_iterator(gzfn))
     self.assertEqual(actual, original)
 
-  def testBadFile(self):
-    """Verify that tf_record_iterator throws an exception on bad TFRecords."""
-    fn = os.path.join(self.get_temp_dir(), "bad_file")
+  def testReadGrowingFile_preservesReadOffset(self):
+    """Verify that tf_record_iterator preserves read offset even after EOF.
+
+    When a file is iterated to EOF, the iterator should raise StopIteration but
+    not actually close the reader. Then if later new data is appended, the
+    iterator should start returning that new data on the next call to next(),
+    preserving the read offset. This behavior is required by TensorBoard.
+    """
+    # Start the file with a good record.
+    fn = os.path.join(self.get_temp_dir(), "file.tfrecord")
     with tf_record.TFRecordWriter(fn) as writer:
-      writer.write(b"123")
-    fn_truncated = os.path.join(self.get_temp_dir(), "bad_file_truncated")
+      writer.write(b"one")
+      writer.write(b"two")
+      writer.flush()
+      iterator = tf_record.tf_record_iterator(fn)
+      self.assertEqual(b"one", next(iterator))
+      self.assertEqual(b"two", next(iterator))
+      # Iterating at EOF results in StopIteration repeatedly.
+      with self.assertRaises(StopIteration):
+        next(iterator)
+      with self.assertRaises(StopIteration):
+        next(iterator)
+      # Retrying after adding a new record successfully returns the new record,
+      # preserving the prior read offset.
+      writer.write(b"three")
+      writer.flush()
+      self.assertEqual(b"three", next(iterator))
+      with self.assertRaises(StopIteration):
+        next(iterator)
+
+  def testReadTruncatedFile_preservesReadOffset(self):
+    """Verify that tf_record_iterator throws an exception on bad TFRecords.
+
+    When a truncated record is completed, the iterator should return that new
+    record on the next attempt at iteration, preserving the read offset. This
+    behavior is required by TensorBoard.
+    """
+    # Write out a record and read it back it to get the raw bytes.
+    fn = os.path.join(self.get_temp_dir(), "temp_file")
+    with tf_record.TFRecordWriter(fn) as writer:
+      writer.write(b"truncated")
     with open(fn, "rb") as f:
-      with open(fn_truncated, "wb") as f2:
-        # DataLossError requires that we've written the header, so this must
-        # be at least 12 bytes.
-        f2.write(f.read(14))
-    with self.assertRaises(errors_impl.DataLossError):
-      for _ in tf_record.tf_record_iterator(fn_truncated):
-        pass
+      record_bytes = f.read()
+    # Start the file with a good record.
+    fn_truncated = os.path.join(self.get_temp_dir(), "truncated_file")
+    with tf_record.TFRecordWriter(fn_truncated) as writer:
+      writer.write(b"good")
+    with open(fn_truncated, "ab", buffering=0) as f:
+      # Cause truncation by omitting the last byte from the record.
+      f.write(record_bytes[:-1])
+      iterator = tf_record.tf_record_iterator(fn_truncated)
+      # Good record appears first.
+      self.assertEqual(b"good", next(iterator))
+      # Truncated record repeatedly causes DataLossError upon iteration.
+      with self.assertRaises(errors_impl.DataLossError):
+        next(iterator)
+      with self.assertRaises(errors_impl.DataLossError):
+        next(iterator)
+      # Retrying after completing the record successfully returns the rest of
+      # the file contents, preserving the prior read offset.
+      f.write(record_bytes[-1:])
+      self.assertEqual(b"truncated", next(iterator))
+      with self.assertRaises(StopIteration):
+        next(iterator)
+
+
+class TFRecordRandomReaderTest(TFCompressionTestCase):
+
+  def testRandomReaderReadingWorks(self):
+    """Test read access to random offsets in the TFRecord file."""
+    records = [self._Record(0, i) for i in range(self._num_records)]
+    fn = self._WriteRecordsToFile(records, "uncompressed_records")
+    reader = tf_record.tf_record_random_reader(fn)
+
+    offset = 0
+    offsets = [offset]
+    # Do a pass of forward reading.
+    for i in range(self._num_records):
+      record, offset = reader.read(offset)
+      self.assertEqual(record, records[i])
+      offsets.append(offset)
+    # Reading off the bound should lead to error.
+    with self.assertRaisesRegex(IndexError, r"Out of range.*offset"):
+      reader.read(offset)
+    # Do a pass of backward reading.
+    for i in range(self._num_records - 1, 0, -1):
+      record, offset = reader.read(offsets[i])
+      self.assertEqual(offset, offsets[i + 1])
+      self.assertEqual(record, records[i])
+
+  def testRandomReaderThrowsErrorForInvalidOffset(self):
+    records = [self._Record(0, i) for i in range(self._num_records)]
+    fn = self._WriteRecordsToFile(records, "uncompressed_records")
+    reader = tf_record.tf_record_random_reader(fn)
+    with self.assertRaisesRegex(errors_impl.DataLossError, r"corrupted record"):
+      reader.read(1)  # 1 is guaranteed to be an invalid offset.
+
+  def testClosingRandomReaderCausesErrorsForFurtherReading(self):
+    records = [self._Record(0, i) for i in range(self._num_records)]
+    fn = self._WriteRecordsToFile(records, "uncompressed_records")
+    reader = tf_record.tf_record_random_reader(fn)
+    reader.close()
+    with self.assertRaisesRegex(errors_impl.FailedPreconditionError, r"closed"):
+      reader.read(0)
+
+
+class TFRecordWriterCloseAndFlushTests(test.TestCase):
+  """TFRecordWriter close and flush tests"""
+
+  # pylint: disable=arguments-differ
+  def setUp(self, compression_type=TFRecordCompressionType.NONE):
+    super(TFRecordWriterCloseAndFlushTests, self).setUp()
+    self._fn = os.path.join(self.get_temp_dir(), "tf_record_writer_test.txt")
+    self._options = tf_record.TFRecordOptions(compression_type)
+    self._writer = tf_record.TFRecordWriter(self._fn, self._options)
+    self._num_records = 20
+
+  def _Record(self, r):
+    return compat.as_bytes("Record %d" % r)
+
+  def testWriteAndLeaveOpen(self):
+    records = list(map(self._Record, range(self._num_records)))
+    for record in records:
+      self._writer.write(record)
+
+    # Verify no segfault if writer isn't explicitly closed.
+
+  def testWriteAndRead(self):
+    records = list(map(self._Record, range(self._num_records)))
+    for record in records:
+      self._writer.write(record)
+    self._writer.close()
+
+    actual = list(tf_record.tf_record_iterator(self._fn, self._options))
+    self.assertListEqual(actual, records)
+
+  def testFlushAndRead(self):
+    records = list(map(self._Record, range(self._num_records)))
+    for record in records:
+      self._writer.write(record)
+    self._writer.flush()
+
+    actual = list(tf_record.tf_record_iterator(self._fn, self._options))
+    self.assertListEqual(actual, records)
+
+  def testDoubleClose(self):
+    self._writer.write(self._Record(0))
+    self._writer.close()
+    self._writer.close()
+
+  def testFlushAfterCloseIsError(self):
+    self._writer.write(self._Record(0))
+    self._writer.close()
+
+    with self.assertRaises(errors_impl.FailedPreconditionError):
+      self._writer.flush()
+
+  def testWriteAfterCloseIsError(self):
+    self._writer.write(self._Record(0))
+    self._writer.close()
+
+    with self.assertRaises(errors_impl.FailedPreconditionError):
+      self._writer.write(self._Record(1))
+
+
+class TFRecordWriterCloseAndFlushGzipTests(TFRecordWriterCloseAndFlushTests):
+  # pylint: disable=arguments-differ
+  def setUp(self):
+    super(TFRecordWriterCloseAndFlushGzipTests,
+          self).setUp(TFRecordCompressionType.GZIP)
+
+
+class TFRecordWriterCloseAndFlushZlibTests(TFRecordWriterCloseAndFlushTests):
+  # pylint: disable=arguments-differ
+  def setUp(self):
+    super(TFRecordWriterCloseAndFlushZlibTests,
+          self).setUp(TFRecordCompressionType.ZLIB)
+
 
 if __name__ == "__main__":
   test.main()

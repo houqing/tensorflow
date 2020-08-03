@@ -17,17 +17,19 @@ limitations under the License.
 
 #include "tensorflow/stream_executor/platform/port.h"
 
+#include "absl/strings/str_cat.h"
 #include "tensorflow/stream_executor/lib/error.h"
-#include "tensorflow/stream_executor/lib/strcat.h"
 #include "tensorflow/stream_executor/platform/logging.h"
 #include "tensorflow/stream_executor/stream_executor_pimpl.h"
 
 namespace stream_executor {
 
-string PlatformKindString(PlatformKind kind) {
+std::string PlatformKindString(PlatformKind kind) {
   switch (kind) {
     case PlatformKind::kCuda:
       return "CUDA";
+    case PlatformKind::kROCm:
+      return "ROCm";
     case PlatformKind::kOpenCL:
       return "OpenCL";
     case PlatformKind::kHost:
@@ -35,11 +37,11 @@ string PlatformKindString(PlatformKind kind) {
     case PlatformKind::kMock:
       return "Mock";
     default:
-      return port::StrCat("InvalidPlatformKind(", static_cast<int>(kind), ")");
+      return absl::StrCat("InvalidPlatformKind(", static_cast<int>(kind), ")");
   }
 }
 
-PlatformKind PlatformKindFromString(string kind) {
+PlatformKind PlatformKindFromString(std::string kind) {
   for (int i = 0; i < static_cast<int>(PlatformKind::kSize); ++i) {
     if (kind == PlatformKindString(static_cast<PlatformKind>(i))) {
       return static_cast<PlatformKind>(i);
@@ -52,6 +54,7 @@ PlatformKind PlatformKindFromString(string kind) {
 bool PlatformIsRunnable(PlatformKind kind) {
   switch (kind) {
     case PlatformKind::kCuda:
+    case PlatformKind::kROCm:
     case PlatformKind::kOpenCL:
     case PlatformKind::kHost:
       return true;
@@ -63,6 +66,7 @@ bool PlatformIsRunnable(PlatformKind kind) {
 bool PlatformIsRunnableOnDevice(PlatformKind kind) {
   switch (kind) {
     case PlatformKind::kCuda:
+    case PlatformKind::kROCm:
     case PlatformKind::kOpenCL:
       return true;
     default:
@@ -87,7 +91,7 @@ Platform::~Platform() {}
 bool Platform::Initialized() const { return true; }
 
 port::Status Platform::Initialize(
-    const std::map<string, string> &platform_options) {
+    const std::map<std::string, std::string> &platform_options) {
   if (!platform_options.empty()) {
     return port::Status(port::error::UNIMPLEMENTED,
                         "this platform does not support custom initialization");
